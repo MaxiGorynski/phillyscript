@@ -7,7 +7,7 @@ from pydub import AudioSegment
 
 def convert_to_wav(audio_path):
     """
-    Convert audio file to WAV format if it's not already WAV.
+    Convert audio file to WAV format if it's not already a WAV file.
     Returns path to WAV file.
     """
     print(f"Converting {audio_path} to WAV format...")
