@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhillyScript</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .title {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 500;
+        }
+        .container {
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        .drop-area {
+            border: 3px dashed #4a6fa5;
+            border-radius: 12px;
+            padding: 4rem 2rem;
+            text-align: center;
+            background-color: white;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .drop-area.active {
+            background-color: rgba(74, 111, 165, 0.1);
+            border-color: #2a4e8a;
+        }
+        .drop-area h2 {
+            margin-top: 0;
+            color: #4a6fa5;
+        }
+        .drop-area p {
+            color: #666;
+            margin-bottom: 1.5rem;
+        }
+        .drop-icon {
+            font-size: 4rem;
+            color: #4a6fa5;
+            margin-bottom: 1rem;
+        }
+        .file-info {
+            margin-top: 2rem;
+        }
+        .status {
+            margin-top: 2rem;
+            padding: 1rem;
+            border-radius: 6px;
+            background-color: #f9f9f9;
+            border-left: 4px solid #4a6fa5;
+            display: none;
+        }
+        .status.active {
+            display: block;
+        }
+        .status.success {
+            border-left-color: #4CAF50;
+        }
+        .status.error {
+            border-left-color: #F44336;
+        }
+        .hidden {
+            display: none;
+        }
+        progress {
+            width: 100%;
+            height: 10px;
+            margin-top: 1rem;
+        }
+        .supported-types {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1 class="title">PhillyScript</h1>
+    </header>
+
+    <div class="container">
+        <div id="drop-area" class="drop-area">
+            <div class="drop-icon">📁</div>
+            <h2>Drag & Drop Audio File</h2>
+            <p>Or click to select file</p>
+            <div class="supported-types">Supported formats: MP3, WAV, FLAC, M4A, AAC</div>
+            <input type="file" id="fileInput" accept=".mp3,.wav,.flac,.m4a,.aac,audio/*" class="hidden">
+        </div>
+
+        <div id="status" class="status">
+            <h3 id="status-title">Processing...</h3>
+            <p id="status-message"></p>
+            <progress id="progress-bar" value="0" max="100"></progress>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const dropArea = document.getElementById('drop-area');
+            const fileInput = document.getElementById('fileInput');
+            const status = document.getElementById('status');
+            const statusTitle = document.getElementById('status-title');
+            const statusMessage = document.getElementById('status-message');
+            const progressBar = document.getElementById('progress-bar');
+
+            // List of accepted audio mime types and extensions
+            const acceptedTypes = [
+                'audio/mpeg',    // MP3
+                'audio/wav',     // WAV
+                'audio/x-wav',   // WAV
+                'audio/flac',    // FLAC
+                'audio/x-flac',  // FLAC
+                'audio/mp4',     // M4A/AAC
+                'audio/aac',     // AAC
+                'audio/x-m4a'    // M4A
+            ];
+
+            const acceptedExtensions = ['.mp3', '.wav', '.flac', '.m4a', '.aac'];
+
+            // Prevent default drag behaviors
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            // Highlight drop area when file is dragged over it
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropArea.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, unhighlight, false);
+            });
+
+            // Handle dropped files
+            dropArea.addEventListener('drop', handleDrop, false);
+
+            // Handle click to select file
+            dropArea.addEventListener('click', () => {
+                fileInput.click();
+            });
+
+            fileInput.addEventListener('change', handleFiles, false);
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            function highlight() {
+                dropArea.classList.add('active');
+            }
+
+            function unhighlight() {
+                dropArea.classList.remove('active');
+            }
+
+            function handleDrop(e) {
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                handleFiles({target: {files: files}});
+            }
+
+            function isAudioFile(file) {
+                // Check by MIME type
+                if (acceptedTypes.includes(file.type)) {
+                    return true;
+                }
+
+                // Check by file extension
+                const fileName = file.name.toLowerCase();
+                return acceptedExtensions.some(ext => fileName.endsWith(ext));
+            }
+
+            function handleFiles(e) {
+                const files = e.target.files;
+                if (files.length > 0) {
+                    const file = files[0];
+
+                    if (isAudioFile(file)) {
+                        processFile(file);
+                    } else {
+                        showStatus('error', 'Invalid File Type', 'Please upload a supported audio file (MP3, WAV, FLAC, M4A, AAC).');
+                    }
+                }
+            }
+
+            function processFile(file) {
+                showStatus('processing', 'Processing Audio', 'Uploading file...');
+                updateProgress(10);
+
+                // Create FormData to send the file to the server
+                const formData = new FormData();
+                formData.append('audioFile', file);
+
+                // Upload the file
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        updateProgress(30, 'File uploaded. Starting transcription...');
+                        startProcessing(data.processId);
+                    } else {
+                        showStatus('error', 'Upload Failed', data.message);
+                    }
+                })
+                .catch(error => {
+                    showStatus('error', 'Upload Error', 'An error occurred during upload: ' + error.message);
+                });
+            }
+
+            function startProcessing(processId) {
+                updateProgress(50, 'Transcribing and analyzing audio...');
+
+                fetch('/process/' + processId, {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        updateProgress(90, 'Processing complete. Preparing download...');
+                        downloadResult(data.outputFilename);
+                    } else {
+                        showStatus('error', 'Processing Failed', data.message);
+                    }
+                })
+                .catch(error => {
+                    showStatus('error', 'Processing Error', 'An error occurred during processing: ' + error.message);
+                });
+            }
+
+            function downloadResult(filename) {
+                updateProgress(100, 'Download starting...');
+
+                // Create a download link and trigger it
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = '/download/' + filename;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+
+                // Clean up
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    showStatus('success', 'Processing Complete', `Transcript has been downloaded: ${filename}`);
+                }, 1000);
+            }
+
+            function updateProgress(value, message = null) {
+                progressBar.value = value;
+                if (message) {
+                    statusMessage.textContent = message;
+                }
+            }
+
+            function showStatus(type, title, message) {
+                status.className = 'status active';
+                if (type === 'success') {
+                    status.classList.add('success');
+                } else if (type === 'error') {
+                    status.classList.add('error');
+                }
+                statusTitle.textContent = title;
+                statusMessage.textContent = message;
+            }
+        });
+    </script>
+</body>
+</html>
