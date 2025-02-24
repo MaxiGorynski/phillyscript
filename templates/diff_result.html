@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhillyScript - Image Difference Results</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .title {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 500;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        .results-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2rem;
+            justify-content: center;
+        }
+        .image-container {
+            width: 450px;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .image-header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 0.5rem 1rem;
+            font-weight: 500;
+        }
+        .image-wrapper {
+            padding: 1rem;
+            text-align: center;
+        }
+        .comparison-image {
+            max-width: 100%;
+            max-height: 400px;
+            object-fit: contain;
+        }
+        .info-panel {
+            background-color: white;
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        .button-container {
+            margin-top: 2rem;
+            text-align: center;
+        }
+        .action-btn {
+            background-color: #4a6fa5;
+            color: white;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            display: inline-block;
+            margin: 0 0.5rem;
+            text-decoration: none;
+        }
+        .action-btn:hover {
+            background-color: #375d8a;
+        }
+        .secondary-btn {
+            background-color: #5a5a5a;
+        }
+        .secondary-btn:hover {
+            background-color: #444444;
+        }
+        .difference-count {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #4a6fa5;
+            text-align: center;
+            margin: 1rem 0;
+        }
+        #no-differences {
+            text-align: center;
+            font-size: 1.2rem;
+            padding: 2rem;
+            background-color: #f0f0f0;
+            border-radius: 8px;
+            margin: 2rem 0;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1 class="title">PhillyScript</h1>
+    </header>
+
+    <div class="container">
+        <h1 style="text-align: center; margin-bottom: 1.5rem;">Image Difference Results</h1>
+
+        <div class="info-panel">
+            <p id="result-summary">Analysis complete. Green boxes highlight the differences found in the comparison image.</p>
+            <div class="difference-count" id="difference-count"></div>
+            <div id="no-differences">No differences detected between the images.</div>
+        </div>
+
+        <div class="results-container">
+            <div class="image-container">
+                <div class="image-header">Original Image</div>
+                <div class="image-wrapper">
+                    <img id="original-image" class="comparison-image" src="" alt="Original Image">
+                </div>
+            </div>
+
+            <div class="image-container">
+                <div class="image-header">Comparison Image (with differences highlighted)</div>
+                <div class="image-wrapper">
+                    <img id="diff-image" class="comparison-image" src="" alt="Differences Highlighted">
+                </div>
+            </div>
+        </div>
+
+        <div class="button-container">
+            <a href="/diff_check" class="action-btn">Compare More Images</a>
+            <a href="/" class="action-btn secondary-btn">Back to Home</a>
+            <a id="download-btn" href="#" class="action-btn" download="differences_highlighted.jpg">Download Result</a>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get result ID from URL
+            const path = window.location.pathname;
+            const resultId = path.split('/').pop();
+
+            // Fetch result data
+            fetch(`/api/diff_result/${resultId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        // Display images
+                        document.getElementById('original-image').src = data.originalImageUrl;
+                        document.getElementById('diff-image').src = data.diffImageUrl;
+
+                        // Set download link
+                        document.getElementById('download-btn').href = data.diffImageUrl;
+
+                        // Update difference count
+                        const diffCount = document.getElementById('difference-count');
+                        diffCount.textContent = `${data.differenceCount} difference${data.differenceCount !== 1 ? 's' : ''} found`;
+
+                        // Show "no differences" message if applicable
+                        if (data.differenceCount === 0) {
+                            document.getElementById('no-differences').style.display = 'block';
+                        }
+                    } else {
+                        alert('Error loading results: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while loading the results');
+                });
+        });
+    </script>
+</body>
+</html>

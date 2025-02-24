@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhillyScript - Image Difference Checker</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .title {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 500;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        .image-upload-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2rem;
+            justify-content: center;
+        }
+        .image-upload-box {
+            width: 450px;
+            height: 350px;
+            border: 3px dashed #4a6fa5;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+            background-color: white;
+            transition: all 0.3s ease;
+        }
+        .image-upload-box.active {
+            background-color: rgba(74, 111, 165, 0.1);
+            border-color: #2a4e8a;
+        }
+        .upload-prompt {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 1rem;
+            z-index: 1;
+        }
+        .upload-prompt h2 {
+            color: #4a6fa5;
+            margin-top: 0;
+        }
+        .upload-icon {
+            font-size: 4rem;
+            color: #4a6fa5;
+            margin-bottom: 1rem;
+        }
+        .hidden {
+            display: none;
+        }
+        .preview-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: none;
+        }
+        .preview-container.active {
+            display: block;
+        }
+        .image-preview {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .remove-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 30px;
+            height: 30px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            font-size: 20px;
+            font-weight: bold;
+            color: #666;
+            border: none;
+            z-index: 2;
+        }
+        .remove-btn:hover {
+            background-color: rgba(255, 255, 255, 1);
+            color: #333;
+        }
+        .button-container {
+            margin-top: 2rem;
+            text-align: center;
+        }
+        .compare-btn {
+            background-color: #4a6fa5;
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            display: inline-block;
+        }
+        .compare-btn:hover {
+            background-color: #375d8a;
+        }
+        .compare-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .image-label {
+            text-align: center;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1 class="title">PhillyScript</h1>
+    </header>
+
+    <div class="container">
+        <h1 style="text-align: center; margin-bottom: 2rem;">Image Difference Checker</h1>
+        <p style="text-align: center; max-width: 700px; margin: 0 auto 2rem auto;">Upload two images to compare. The system will analyze and highlight the differences between them.</p>
+
+        <div class="image-upload-container">
+            <div>
+                <div class="image-label">Image 1 (Reference)</div>
+                <div id="upload-box-1" class="image-upload-box">
+                    <div class="upload-prompt">
+                        <div class="upload-icon">📁</div>
+                        <h2>Drag & Drop Image</h2>
+                        <p>or click to select</p>
+                    </div>
+                    <div id="preview-container-1" class="preview-container">
+                        <img id="preview-1" class="image-preview" src="#" alt="Preview">
+                        <button class="remove-btn" onclick="removeImage(1)">×</button>
+                    </div>
+                    <input type="file" id="file-input-1" class="hidden" accept="image/*">
+                </div>
+            </div>
+
+            <div>
+                <div class="image-label">Image 2 (Comparison)</div>
+                <div id="upload-box-2" class="image-upload-box">
+                    <div class="upload-prompt">
+                        <div class="upload-icon">📁</div>
+                        <h2>Drag & Drop Image</h2>
+                        <p>or click to select</p>
+                    </div>
+                    <div id="preview-container-2" class="preview-container">
+                        <img id="preview-2" class="image-preview" src="#" alt="Preview">
+                        <button class="remove-btn" onclick="removeImage(2)">×</button>
+                    </div>
+                    <input type="file" id="file-input-2" class="hidden" accept="image/*">
+                </div>
+            </div>
+        </div>
+
+        <div class="button-container">
+            <button id="compare-btn" class="compare-btn" disabled>Compare Images</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const uploadBoxes = [
+                document.getElementById('upload-box-1'),
+                document.getElementById('upload-box-2')
+            ];
+            const fileInputs = [
+                document.getElementById('file-input-1'),
+                document.getElementById('file-input-2')
+            ];
+            const previewContainers = [
+                document.getElementById('preview-container-1'),
+                document.getElementById('preview-container-2')
+            ];
+            const previews = [
+                document.getElementById('preview-1'),
+                document.getElementById('preview-2')
+            ];
+            const compareBtn = document.getElementById('compare-btn');
+
+            // Image data storage
+            const imageFiles = [null, null];
+
+            // Setup drag and drop for each box
+            for (let i = 0; i < 2; i++) {
+                setupDragDrop(i);
+            }
+
+            function setupDragDrop(index) {
+                const box = uploadBoxes[index];
+                const input = fileInputs[index];
+
+                // Prevent default behaviors
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    box.addEventListener(eventName, preventDefaults, false);
+                });
+
+                // Highlight on drag enter/over
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    box.addEventListener(eventName, function() {
+                        box.classList.add('active');
+                    }, false);
+                });
+
+                // Remove highlight on drag leave/drop
+                ['dragleave', 'drop'].forEach(eventName => {
+                    box.addEventListener(eventName, function() {
+                        box.classList.remove('active');
+                    }, false);
+                });
+
+                // Handle drop
+                box.addEventListener('drop', function(e) {
+                    const dt = e.dataTransfer;
+                    handleFiles(dt.files, index);
+                }, false);
+
+                // Handle click to select
+                box.addEventListener('click', function() {
+                    if (!previewContainers[index].classList.contains('active')) {
+                        input.click();
+                    }
+                }, false);
+
+                // Handle file selection via input
+                input.addEventListener('change', function() {
+                    handleFiles(this.files, index);
+                }, false);
+            }
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            function handleFiles(files, index) {
+                if (files.length === 0) return;
+
+                const file = files[0];
+                if (!file.type.match('image.*')) {
+                    alert('Please select an image file');
+                    return;
+                }
+
+                imageFiles[index] = file;
+                displayPreview(file, index);
+                updateCompareButton();
+            }
+
+            function displayPreview(file, index) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previews[index].src = e.target.result;
+                    previewContainers[index].classList.add('active');
+                }
+                reader.readAsDataURL(file);
+            }
+
+            // Remove image function
+            window.removeImage = function(index) {
+                index = index - 1; // Adjust for 0-based array
+                previewContainers[index].classList.remove('active');
+                previews[index].src = '#';
+                fileInputs[index].value = '';
+                imageFiles[index] = null;
+                updateCompareButton();
+            }
+
+            function updateCompareButton() {
+                compareBtn.disabled = !(imageFiles[0] && imageFiles[1]);
+            }
+
+            // Handle compare button click
+            compareBtn.addEventListener('click', function() {
+                if (!imageFiles[0] || !imageFiles[1]) {
+                    alert('Please upload both images to compare');
+                    return;
+                }
+
+                // Create form data to send to server
+                const formData = new FormData();
+                formData.append('image1', imageFiles[0]);
+                formData.append('image2', imageFiles[1]);
+
+                // Submit form to server
+                fetch('/compare_images', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        // Redirect to results page
+                        window.location.href = '/diff_result/' + data.resultId;
+                    } else {
+                        alert('Error: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred during image comparison');
+                });
+            });
+        });
+    </script>
+</body>
+</html>
