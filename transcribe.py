@@ -7,7 +7,7 @@ from pydub import AudioSegment
 
 def convert_to_wav(audio_path):
     """
-    Convert audio file to WAV format if it's not already a WAV file.
+    Convert audio file to WAV format if it's not already WAV.
     Returns path to WAV file.
     """
     print(f"Converting {audio_path} to WAV format...")
@@ -71,42 +71,64 @@ def process_transcript(transcript):
     """
     print("\nProcessing transcript...")
     results = []
+    current_feature = None
+    is_first_comment = True
 
-    # Split transcript at "new feature" occurrences
-    parts = transcript.split("new feature")
+    # Split transcript into words for easier processing
+    words = transcript.split()
+    i = 0
 
-    # Skip the first split if it's empty (transcript starts with "new feature")
-    parts = [p for p in parts if p.strip()]
+    while i < len(words):
+        # Check for "new feature"
+        if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
+            # Start collecting new feature
+            current_feature = ""
+            is_first_comment = True
+            i += 2  # Skip "new feature"
 
-    print(f"Found {len(parts)} feature sections")
+            # Collect feature text until "comment" or another "new feature"
+            while i < len(words):
+                if words[i] == "comment":
+                    break
+                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
+                    i -= 1  # Back up to process new feature
+                    break
+                current_feature += words[i] + " "
+                i += 1
 
-    for part in parts:
-        # Split each part at "comment"
-        feature_comment = part.split("comment")
+            current_feature = current_feature.strip()
+            print(f"Found new feature: {current_feature}")
 
-        if len(feature_comment) >= 2:
-            feature = feature_comment[0].strip()
-            comment = feature_comment[1].strip()
+        # Check for "comment"
+        elif words[i] == "comment":
+            i += 1  # Skip "comment"
+            comment_text = ""
 
-            # If there are multiple "comment" splits, join the rest
-            if len(feature_comment) > 2:
-                comment = " comment ".join(feature_comment[1:]).strip()
+            # Collect comment text until another "comment" or "new feature"
+            while i < len(words):
+                if words[i] == "comment":
+                    break
+                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
+                    i -= 1  # Back up to process new feature
+                    break
+                comment_text += words[i] + " "
+                i += 1
 
-            print(f"Found feature: {feature}")
-            print(f"Found comment: {comment}")
+            comment_text = comment_text.strip()
+            print(f"Found comment: {comment_text}")
 
-            results.append({
-                "Feature": feature,
-                "Comment": comment
-            })
+            # Add to results if we have a feature
+            if current_feature:
+                results.append({
+                    "Feature": current_feature if is_first_comment else " ",  # Empty space for subsequent comments
+                    "Comment": comment_text
+                })
+                print(
+                    f"Added row - Feature: {'[First]' if is_first_comment else '[Subsequent]'}, Comment: {comment_text}")
+                is_first_comment = False
+
         else:
-            # If no "comment" found, treat everything as feature
-            feature = feature_comment[0].strip()
-            print(f"Found feature without comment: {feature}")
-            results.append({
-                "Feature": feature,
-                "Comment": ""
-            })
+            i += 1
 
     print(f"\nProcessed {len(results)} feature-comment pairs")
     return results
