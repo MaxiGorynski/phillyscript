@@ -15,13 +15,36 @@
         header {
             background-color: #4a6fa5;
             color: white;
-            padding: 1rem;
+            padding: 0 1rem;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         .title {
             margin: 0;
             font-size: 1.5rem;
             font-weight: 500;
+            padding: 1rem 0;
+        }
+        .nav-bar {
+            display: flex;
+            gap: 1rem;
+        }
+        .nav-button {
+            padding: 0.5rem 1rem;
+            background-color: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+            text-decoration: none;
+            transition: background-color 0.3s ease;
+        }
+        .nav-button:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+        .disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
         }
         .container {
             max-width: 1200px;
@@ -34,8 +57,12 @@
             gap: 2rem;
             justify-content: center;
         }
-        .image-upload-box {
+        .image-box-wrapper {
+            position: relative;
             width: 450px;
+        }
+        .image-upload-box {
+            width: 100%;
             height: 350px;
             border: 3px dashed #4a6fa5;
             border-radius: 12px;
@@ -72,7 +99,7 @@
             margin-bottom: 1rem;
         }
         .hidden {
-            display: none;
+            display: none !important;
         }
         .preview-container {
             position: relative;
@@ -90,11 +117,11 @@
         }
         .remove-btn {
             position: absolute;
-            top: 10px;
-            right: 10px;
+            top: -15px;
+            right: -15px;
             width: 30px;
             height: 30px;
-            background-color: rgba(255, 255, 255, 0.8);
+            background-color: white;
             border-radius: 50%;
             display: flex;
             justify-content: center;
@@ -102,13 +129,13 @@
             cursor: pointer;
             font-size: 20px;
             font-weight: bold;
-            color: #666;
-            border: none;
-            z-index: 2;
+            color: #333;
+            border: 1px solid #ddd;
+            z-index: 10;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
         }
         .remove-btn:hover {
-            background-color: rgba(255, 255, 255, 1);
-            color: #333;
+            background-color: #f0f0f0;
         }
         .button-container {
             margin-top: 2rem;
@@ -141,7 +168,12 @@
 </head>
 <body>
     <header>
-        <h1 class="title">PhillyScript</h1>
+        <h1 class="title"><a href="/" style="color: white; text-decoration: none;">PhillyScript</a></h1>
+        <div class="nav-bar">
+            <a href="/transcribe" class="nav-button">Transcribe</a>
+            <a href="/diff_check" class="nav-button">Assess for Differences</a>
+            <a href="#" class="nav-button disabled">Check for Differences</a>
+        </div>
     </header>
 
     <div class="container">
@@ -149,7 +181,7 @@
         <p style="text-align: center; max-width: 700px; margin: 0 auto 2rem auto;">Upload two images to compare. The system will analyze and highlight the differences between them.</p>
 
         <div class="image-upload-container">
-            <div>
+            <div class="image-box-wrapper">
                 <div class="image-label">Image 1 (Reference)</div>
                 <div id="upload-box-1" class="image-upload-box">
                     <div class="upload-prompt">
@@ -159,13 +191,13 @@
                     </div>
                     <div id="preview-container-1" class="preview-container">
                         <img id="preview-1" class="image-preview" src="#" alt="Preview">
-                        <button class="remove-btn" onclick="removeImage(1)">×</button>
                     </div>
                     <input type="file" id="file-input-1" class="hidden" accept="image/*">
                 </div>
+                <button id="remove-btn-1" class="remove-btn hidden" onclick="removeImage(1)">×</button>
             </div>
 
-            <div>
+            <div class="image-box-wrapper">
                 <div class="image-label">Image 2 (Comparison)</div>
                 <div id="upload-box-2" class="image-upload-box">
                     <div class="upload-prompt">
@@ -175,10 +207,10 @@
                     </div>
                     <div id="preview-container-2" class="preview-container">
                         <img id="preview-2" class="image-preview" src="#" alt="Preview">
-                        <button class="remove-btn" onclick="removeImage(2)">×</button>
                     </div>
                     <input type="file" id="file-input-2" class="hidden" accept="image/*">
                 </div>
+                <button id="remove-btn-2" class="remove-btn hidden" onclick="removeImage(2)">×</button>
             </div>
         </div>
 
@@ -205,10 +237,19 @@
                 document.getElementById('preview-1'),
                 document.getElementById('preview-2')
             ];
+            const removeButtons = [
+                document.getElementById('remove-btn-1'),
+                document.getElementById('remove-btn-2')
+            ];
             const compareBtn = document.getElementById('compare-btn');
 
             // Image data storage
             const imageFiles = [null, null];
+
+            // Make sure remove buttons are hidden on page load
+            removeButtons.forEach(btn => {
+                btn.classList.add('hidden');
+            });
 
             // Setup drag and drop for each box
             for (let i = 0; i < 2; i++) {
@@ -281,6 +322,9 @@
                 reader.onload = function(e) {
                     previews[index].src = e.target.result;
                     previewContainers[index].classList.add('active');
+
+                    // Show the remove button only when image is loaded
+                    removeButtons[index].classList.remove('hidden');
                 }
                 reader.readAsDataURL(file);
             }
@@ -289,6 +333,10 @@
             window.removeImage = function(index) {
                 index = index - 1; // Adjust for 0-based array
                 previewContainers[index].classList.remove('active');
+
+                // Hide the remove button when image is removed
+                removeButtons[index].classList.add('hidden');
+
                 previews[index].src = '#';
                 fileInputs[index].value = '';
                 imageFiles[index] = null;
@@ -334,6 +382,14 @@
                     console.error('Error:', error);
                     alert('An error occurred during image comparison');
                 });
+            });
+        });
+
+        // Handle disabled navigation buttons
+        document.querySelectorAll('.nav-button.disabled').forEach(button => {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                alert('This feature is coming soon!');
             });
         });
     </script>
