@@ -12,6 +12,14 @@ from werkzeug.utils import secure_filename
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
+import difflib
+import os
+from werkzeug.utils import secure_filename
+import uuid
+import re
+from docx import Document
+from io import BytesIO
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -410,7 +418,6 @@ def basic():
     </html>
     """
 
-
 @app.route('/')
 def index():
     try:
@@ -696,6 +703,424 @@ def process_image_difference(image1_path, image2_path, output_original_path, out
 
     return len(significant_contours)
 
+
+@app.route('/finalise_report')
+def finalise_report():
+    """Render the finalise report page"""
+    return render_template('finalise_report.html')
+
+
+@app.route('/compare_text', methods=['POST'])
+def compare_text():
+    """Endpoint to handle text comparison uploads and processing"""
+    if 'original' not in request.files or 'comparison' not in request.files:
+        return jsonify({
+            'status': 'error',
+            'message': 'Both files are required'
+        })
+
+    original_file = request.files['original']
+    comparison_file = request.files['comparison']
+
+    if original_file.filename == '' or comparison_file.filename == '':
+        return jsonify({
+            'status': 'error',
+            'message': 'No file selected'
+        })
+
+    # Generate a unique ID for this comparison
+    result_id = str(uuid.uuid4())
+
+    # Save uploaded files temporarily
+    original_path = UPLOAD_FOLDER / f"{result_id}_original{Path(secure_filename(original_file.filename)).suffix}"
+    comparison_path = UPLOAD_FOLDER / f"{result_id}_comparison{Path(secure_filename(comparison_file.filename)).suffix}"
+
+    original_file.save(original_path)
+    comparison_file.save(comparison_path)
+
+    # Process files and find differences
+    try:
+        # Extract text from files
+        original_text = extract_text_from_file(original_path)
+        comparison_text = extract_text_from_file(comparison_path)
+
+        if not original_text or not comparison_text:
+            raise ValueError("Could not extract text from one or both files")
+
+        # Compare texts and generate HTML with differences highlighted
+        result_html = generate_diff_html(original_text, comparison_text)
+
+        # Save the result
+        result_path = RESULT_FOLDER / f"{result_id}_diff.html"
+        with open(result_path, 'w', encoding='utf-8') as f:
+            f.write(result_html)
+
+        # Clean up temporary files
+        original_path.unlink(missing_ok=True)
+        comparison_path.unlink(missing_ok=True)
+
+        return jsonify({
+            'status': 'success',
+            'resultUrl': f"/view_comparison/{result_id}",  # Changed URL to point to a new route
+            'message': 'Files compared successfully'
+        })
+
+    except Exception as e:
+        # Clean up temporary files
+        original_path.unlink(missing_ok=True)
+        comparison_path.unlink(missing_ok=True)
+
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing files: {str(e)}'
+        })
+
+
+@app.route('/view_comparison/<result_id>')
+def view_comparison(result_id):
+    """Serve the comparison result directly"""
+    result_path = RESULT_FOLDER / f"{result_id}_diff.html"
+
+    if not result_path.exists():
+        return "Comparison result not found", 404
+
+    with open(result_path, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+
+    return html_content
+
+@app.route('/generate_report', methods=['POST'])
+def generate_report():
+    """Endpoint to handle report generation from CSV"""
+    use_latest = request.form.get('useLatest') == 'true'
+
+    try:
+        csv_path = None
+
+        if use_latest:
+            # Find the most recent CSV file in the transcripts folder
+            transcript_dir = Path('temp_transcripts')
+            if not transcript_dir.exists():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No transcript directory found'
+                })
+
+            csv_files = list(transcript_dir.glob('*.csv'))
+            if not csv_files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV files found in the transcript directory'
+                })
+
+            # Sort by modification time, newest first
+            csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            csv_path = csv_files[0]
+        else:
+            if 'csv' not in request.files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV file provided'
+                })
+
+            csv_file = request.files['csv']
+            if csv_file.filename == '':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No file selected'
+                })
+
+            # Generate a unique ID for this report
+            result_id = str(uuid.uuid4())
+
+            # Save uploaded file temporarily
+            csv_path = UPLOAD_FOLDER / f"{result_id}_{secure_filename(csv_file.filename)}"
+            csv_file.save(csv_path)
+
+        # Generate report from CSV
+        result_path = generate_docx_report(csv_path)
+
+        # Clean up temporary file if it was uploaded
+        if not use_latest:
+            csv_path.unlink(missing_ok=True)
+
+        return jsonify({
+            'status': 'success',
+            'resultUrl': f"/download_report/{result_path.name}",
+            'message': 'Report generated successfully'
+        })
+
+    except Exception as e:
+        # Clean up temporary file if it exists and was uploaded
+        if csv_path and not use_latest and csv_path.exists():
+            csv_path.unlink(missing_ok=True)
+
+        return jsonify({
+            'status': 'error',
+            'message': f'Error generating report: {str(e)}'
+        })
+
+
+@app.route('/download_report/<filename>')
+def download_report(filename):
+    """Serve the generated report for download"""
+    return send_from_directory(RESULT_FOLDER, filename, as_attachment=True)
+
+
+def extract_text_from_file(file_path):
+    """Extract text content from various file formats"""
+    file_ext = file_path.suffix.lower()
+
+    try:
+        if file_ext == '.txt':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+
+        elif file_ext in ['.doc', '.docx']:
+            # Use the properly imported Document class
+            from docx import Document
+            doc = Document(file_path)
+            return '\n'.join([para.text for para in doc.paragraphs])
+
+        elif file_ext == '.pdf':
+            # Note: This would require PyPDF2 or another PDF library
+            # For simplicity, we'll just return an error for now
+            raise ValueError("PDF extraction not implemented")
+
+        elif file_ext == '.rtf':
+            # RTF parsing is complex, you'd need a library like striprtf
+            raise ValueError("RTF extraction not implemented")
+
+        else:
+            # Try to read as plain text by default
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+
+    except Exception as e:
+        raise ValueError(f"Could not extract text from file: {str(e)}")
+
+
+def generate_diff_html(original_text, comparison_text):
+    """
+    Generate HTML highlighting differences between two texts
+    """
+    # Split texts into lines
+    original_lines = original_text.splitlines()
+    comparison_lines = comparison_text.splitlines()
+
+    # Get differences
+    differ = difflib.HtmlDiff(wrapcolumn=80)
+    diff_html = differ.make_file(original_lines, comparison_lines,
+                                 'Original Text', 'Comparison Text',
+                                 context=True, numlines=3)
+
+    # Enhance the HTML with our own styling
+    styled_html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Text Comparison Results</title>
+        <style>
+            body {{
+                font-family: 'Segoe UI', Arial, sans-serif;
+                margin: 20px;
+                line-height: 1.5;
+            }}
+            .diff-header {{
+                background-color: #4a6fa5;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }}
+            .diff-header h1 {{
+                margin: 0;
+                font-size: 24px;
+            }}
+            table.diff {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+                font-family: monospace;
+            }}
+            .diff td {{
+                padding: 5px;
+                border: 1px solid #ddd;
+                vertical-align: top;
+            }}
+            .diff span.diff_add {{
+                background-color: #e6ffe6;
+                color: green;
+                font-weight: bold;
+            }}
+            .diff span.diff_sub {{
+                background-color: #ffe6e6;
+                color: red;
+                text-decoration: line-through;
+            }}
+            .diff span.diff_chg {{
+                background-color: #fff5cc;
+                color: #996600;
+                font-weight: bold;
+            }}
+            .diff th {{
+                background-color: #f0f0f0;
+                padding: 5px;
+                border: 1px solid #ddd;
+                text-align: center;
+            }}
+            .legend {{
+                margin-top: 20px;
+                padding: 10px;
+                background-color: #f9f9f9;
+                border-radius: 5px;
+            }}
+            .legend ul {{
+                padding-left: 20px;
+            }}
+            .back-button {{
+                padding: 8px 15px;
+                background-color: #4a6fa5;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+                font-size: 14px;
+            }}
+            .back-button:hover {{
+                background-color: #375d8a;
+            }}
+            .footer {{
+                margin-top: 30px;
+                text-align: center;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="diff-header">
+            <h1>Text Comparison Results</h1>
+            <button onclick="goBack()" class="back-button">Back to Report Options</button>
+        </div>
+
+        {diff_html}
+
+        <div class="legend">
+            <h3>Legend:</h3>
+            <ul>
+                <li><span style="color: green; font-weight: bold;">Added content</span> - Content that appears in the comparison text but not in the original</li>
+                <li><span style="color: red; text-decoration: line-through;">Removed content</span> - Content that appears in the original text but not in the comparison</li>
+                <li><span style="color: #996600; font-weight: bold;">Changed content</span> - Content that has been modified between the texts</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            <button onclick="goBack()" class="back-button">Back to Report Options</button>
+        </div>
+
+        <script>
+        function goBack() {{
+            window.location.href = window.location.origin + '/finalise_report';
+        }}
+        </script>
+    </body>
+    </html>
+    """
+
+    return styled_html
+
+
+def generate_docx_report(csv_path):
+    """
+    Generate a formatted Word document from CSV data
+    """
+    import pandas as pd
+    from docx import Document  # Correct import
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    # Read CSV data
+    df = pd.read_csv(csv_path)
+
+    # Create a new Document
+    doc = Document()
+
+    # Set document properties
+    doc.core_properties.title = "Property Inspection Report"
+    doc.core_properties.author = "PhillyScript"
+
+    # Add a title
+    title = doc.add_heading('Property Inspection Report', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Add date
+    date_paragraph = doc.add_paragraph()
+    date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
+    date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Add a line break
+    doc.add_paragraph()
+
+    # Add an introduction
+    doc.add_heading('Introduction', level=1)
+    intro_text = ("This report documents the condition of the property and identifies any issues "
+                  "that require attention. Items marked with 'TR' indicate tenant responsibility.")
+    doc.add_paragraph(intro_text)
+
+    # Add a line break
+    doc.add_paragraph()
+
+    # Add section for features and comments
+    doc.add_heading('Inspection Details', level=1)
+
+    # Track current feature for grouping comments
+    current_feature = None
+
+    # Process each row in the CSV
+    for index, row in df.iterrows():
+        feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
+            'Feature'].strip() else None
+        comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
+
+        # Check for tenant responsibility
+        is_tenant_responsibility = False
+        if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
+            is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
+
+        # If this is a new feature, add a subheading
+        if feature and feature != " ":
+            current_feature = feature
+            doc.add_heading(feature, level=2)
+
+        # Add the comment as a paragraph
+        if comment:
+            p = doc.add_paragraph()
+            p.style = 'List Bullet'
+            comment_run = p.add_run(comment)
+
+            # If tenant responsibility, add indicator and style
+            if is_tenant_responsibility:
+                tr_run = p.add_run(" [TR]")
+                tr_run.bold = True
+                tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
+
+    # Add summary section
+    doc.add_heading('Summary', level=1)
+    doc.add_paragraph("This report provides a comprehensive overview of the property's condition. "
+                      "Please address any issues identified in this report promptly.")
+
+    # Save the document
+    result_id = str(uuid.uuid4())
+    result_path = RESULT_FOLDER / f"{result_id}_inspection_report.docx"
+    doc.save(result_path)
+
+    return result_path
 
 if __name__ == '__main__':
     # Determine optimal number of threads

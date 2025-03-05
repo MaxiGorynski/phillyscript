@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhillyScript - Finalise Report</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 0 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .title {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 500;
+            padding: 1rem 0;
+        }
+        .nav-bar {
+            display: flex;
+            gap: 1rem;
+        }
+        .nav-button {
+            padding: 0.5rem 1rem;
+            background-color: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+            text-decoration: none;
+            transition: background-color 0.3s ease;
+        }
+        .nav-button:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+        .disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        .page-title {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .option-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2rem;
+            justify-content: center;
+        }
+        .option-card {
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 500px;
+            padding: 2rem;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .option-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
+        }
+        .option-title {
+            font-size: 1.5rem;
+            margin-top: 0;
+            margin-bottom: 1rem;
+            color: #4a6fa5;
+            text-align: center;
+        }
+        .option-description {
+            color: #666;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        .upload-section {
+            margin-top: 1.5rem;
+        }
+        .file-upload {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 2px dashed #4a6fa5;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            background-color: rgba(74, 111, 165, 0.05);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .file-upload.active {
+            background-color: rgba(74, 111, 165, 0.1);
+            border-color: #2a4e8a;
+        }
+        .upload-icon {
+            font-size: 2.5rem;
+            color: #4a6fa5;
+            margin-bottom: 0.5rem;
+        }
+        .file-upload-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        .upload-text {
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        .file-info {
+            margin-top: 0.5rem;
+            background-color: #f0f0f0;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            display: none;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .file-info.active {
+            display: block;
+        }
+        .button-container {
+            text-align: center;
+            margin-top: 1.5rem;
+        }
+        .action-btn {
+            background-color: #4a6fa5;
+            color: white;
+            border: none;
+            padding: 0.8rem 1.5rem;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        .action-btn:hover {
+            background-color: #375d8a;
+        }
+        .action-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .file-input {
+            display: none;
+        }
+        .hidden {
+            display: none !important;
+        }
+        .status {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 6px;
+            background-color: #f9f9f9;
+            border-left: 4px solid #4a6fa5;
+            display: none;
+        }
+        .status.active {
+            display: block;
+        }
+        .status.success {
+            border-left-color: #4CAF50;
+        }
+        .status.error {
+            border-left-color: #F44336;
+        }
+        .tab-container {
+            margin-bottom: 2rem;
+        }
+        .tabs {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 2rem;
+        }
+        .tab {
+            padding: 0.8rem 1.5rem;
+            background-color: #e0e0e0;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: background-color 0.3s ease;
+        }
+        .tab:first-child {
+            border-top-left-radius: 6px;
+            border-bottom-left-radius: 6px;
+        }
+        .tab:last-child {
+            border-top-right-radius: 6px;
+            border-bottom-right-radius: 6px;
+        }
+        .tab.active {
+            background-color: #4a6fa5;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            margin-top: 1rem;
+            overflow: hidden;
+            display: none;
+        }
+        .progress-bar.active {
+            display: block;
+        }
+        .progress {
+            height: 100%;
+            background-color: #4a6fa5;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .remove-file {
+            color: #F44336;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1 class="title"><a href="/" style="color: white; text-decoration: none;">PhillyScript</a></h1>
+        <div class="nav-bar">
+            <a href="/transcribe" class="nav-button">Transcribe</a>
+            <a href="/diff_check" class="nav-button">Assess for Differences</a>
+            <a href="/finalise_report" class="nav-button">Finalise Report</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h1 class="page-title">Finalise Report</h1>
+
+        <div class="tabs">
+            <button class="tab active" data-tab="compare">Compare Reports</button>
+            <button class="tab" data-tab="generate">Generate New Report</button>
+        </div>
+
+        <div id="compare-tab" class="tab-content active">
+            <div class="option-card">
+                <h2 class="option-title">Compare Reports</h2>
+                <p class="option-description">Upload two text files to identify and highlight differences between them.</p>
+
+                <div class="upload-section">
+                    <label class="file-upload-label">Original Text File (Reference)</label>
+                    <div id="upload-original" class="file-upload">
+                        <div class="upload-icon">📄</div>
+                        <p class="upload-text">Drag & drop or click to select a file</p>
+                        <input type="file" id="original-file" class="file-input" accept=".txt,.doc,.docx,.pdf,.rtf">
+                    </div>
+                    <div id="original-file-info" class="file-info">
+                        <span id="original-file-name">No file selected</span>
+                        <span id="remove-original" class="remove-file hidden">✕</span>
+                    </div>
+
+                    <label class="file-upload-label">Comparison Text File</label>
+                    <div id="upload-comparison" class="file-upload">
+                        <div class="upload-icon">📄</div>
+                        <p class="upload-text">Drag & drop or click to select a file</p>
+                        <input type="file" id="comparison-file" class="file-input" accept=".txt,.doc,.docx,.pdf,.rtf">
+                    </div>
+                    <div id="comparison-file-info" class="file-info">
+                        <span id="comparison-file-name">No file selected</span>
+                        <span id="remove-comparison" class="remove-file hidden">✕</span>
+                    </div>
+                </div>
+
+                <div class="button-container">
+                    <button id="compare-btn" class="action-btn" disabled>Compare Files</button>
+                </div>
+
+                <div id="compare-status" class="status">
+                    <h3 id="compare-status-title">Processing...</h3>
+                    <p id="compare-status-message"></p>
+                    <div id="compare-progress-bar" class="progress-bar">
+                        <div id="compare-progress" class="progress"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="generate-tab" class="tab-content">
+            <div class="option-card">
+                <h2 class="option-title">Generate New Report</h2>
+                <p class="option-description">Create a formatted Word document from your latest CSV data.</p>
+
+                <div class="upload-section">
+                    <div class="button-container">
+                        <button id="use-latest-btn" class="action-btn">Use Latest CSV</button>
+                        <p>Or upload a specific CSV file:</p>
+                    </div>
+
+                    <div id="upload-csv" class="file-upload">
+                        <div class="upload-icon">📊</div>
+                        <p class="upload-text">Drag & drop or click to select a CSV file</p>
+                        <input type="file" id="csv-file" class="file-input" accept=".csv">
+                    </div>
+                    <div id="csv-file-info" class="file-info">
+                        <span id="csv-file-name">No file selected</span>
+                        <span id="remove-csv" class="remove-file hidden">✕</span>
+                    </div>
+                </div>
+
+                <div class="button-container">
+                    <button id="generate-btn" class="action-btn" disabled>Generate Report</button>
+                </div>
+
+                <div id="generate-status" class="status">
+                    <h3 id="generate-status-title">Processing...</h3>
+                    <p id="generate-status-message"></p>
+                    <div id="generate-progress-bar" class="progress-bar">
+                        <div id="generate-progress" class="progress"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Tab switching functionality
+            const tabs = document.querySelectorAll('.tab');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            tabs.forEach(tab => {
+                tab.addEventListener('click', function() {
+                    const tabId = this.getAttribute('data-tab');
+
+                    // Update active tab
+                    tabs.forEach(t => t.classList.remove('active'));
+                    this.classList.add('active');
+
+                    // Show corresponding content
+                    tabContents.forEach(content => {
+                        content.classList.remove('active');
+                    });
+                    document.getElementById(tabId + '-tab').classList.add('active');
+                });
+            });
+
+            // File upload for Compare Reports
+            setupFileUpload('original', 'upload-original', 'original-file', 'original-file-info', 'original-file-name', 'remove-original');
+            setupFileUpload('comparison', 'upload-comparison', 'comparison-file', 'comparison-file-info', 'comparison-file-name', 'remove-comparison');
+
+            // File upload for Generate Report
+            setupFileUpload('csv', 'upload-csv', 'csv-file', 'csv-file-info', 'csv-file-name', 'remove-csv');
+
+            // Button references
+            const compareBtn = document.getElementById('compare-btn');
+            const generateBtn = document.getElementById('generate-btn');
+            const useLatestBtn = document.getElementById('use-latest-btn');
+
+            // File data storage
+            const files = {
+                original: null,
+                comparison: null,
+                csv: null,
+                useLatest: false
+            };
+
+            // Update Compare button state
+            function updateCompareButton() {
+                compareBtn.disabled = !(files.original && files.comparison);
+            }
+
+            // Update Generate button state
+            function updateGenerateButton() {
+                generateBtn.disabled = !(files.csv || files.useLatest);
+            }
+
+            // File upload handler
+            function setupFileUpload(fileType, uploadId, inputId, infoId, nameId, removeId) {
+                const uploadArea = document.getElementById(uploadId);
+                const fileInput = document.getElementById(inputId);
+                const fileInfo = document.getElementById(infoId);
+                const fileName = document.getElementById(nameId);
+                const removeFile = document.getElementById(removeId);
+
+                if (!uploadArea || !fileInput || !fileInfo || !fileName || !removeFile) {
+                    console.error(`One or more elements not found for ${fileType} upload setup`);
+                    return;
+                }
+
+                // Prevent default behaviors
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, preventDefaults, false);
+                });
+
+                // Highlight on drag enter/over
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, function() {
+                        uploadArea.classList.add('active');
+                    }, false);
+                });
+
+                // Remove highlight on drag leave/drop
+                ['dragleave', 'drop'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, function() {
+                        uploadArea.classList.remove('active');
+                    }, false);
+                });
+
+                // Handle drop
+                uploadArea.addEventListener('drop', function(e) {
+                    console.log(`File dropped on ${fileType} upload area`);
+                    const dt = e.dataTransfer;
+                    handleFiles(dt.files, fileType);
+                }, false);
+
+                // Handle click to select
+                uploadArea.addEventListener('click', function() {
+                    console.log(`${fileType} upload area clicked`);
+                    fileInput.click();
+                }, false);
+
+                // Handle file selection via input
+                fileInput.addEventListener('change', function(e) {
+                    console.log(`File selected via input for ${fileType}`);
+                    handleFiles(this.files, fileType);
+                }, false);
+
+                // Handle file removal
+                removeFile.addEventListener('click', function(e) {
+                    e.stopPropagation(); // Prevent event from bubbling to the upload area
+                    console.log(`Removing file for ${fileType}`);
+                    files[fileType] = null;
+                    fileInput.value = '';
+                    fileName.textContent = 'No file selected';
+                    fileInfo.classList.remove('active');
+                    removeFile.classList.add('hidden');
+
+                    if (fileType === 'original' || fileType === 'comparison') {
+                        updateCompareButton();
+                    } else if (fileType === 'csv') {
+                        files.useLatest = false;
+                        updateGenerateButton();
+                    }
+                });
+
+                function handleFiles(uploadedFiles, type) {
+                    if (uploadedFiles.length === 0) return;
+
+                    const file = uploadedFiles[0];
+                    console.log(`Processing file: ${file.name} for ${type}`);
+                    files[type] = file;
+
+                    // Display file info
+                    fileName.textContent = file.name;
+                    fileInfo.classList.add('active');
+                    removeFile.classList.remove('hidden');
+
+                    // Update button states
+                    if (type === 'original' || type === 'comparison') {
+                        updateCompareButton();
+                    } else if (type === 'csv') {
+                        files.useLatest = false;
+                        updateGenerateButton();
+                    }
+                }
+            }
+
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            // Use latest CSV button
+            if (useLatestBtn) {
+                useLatestBtn.addEventListener('click', function() {
+                    console.log('Using latest CSV');
+                    files.useLatest = true;
+                    files.csv = null;
+
+                    // Reset CSV file selector
+                    document.getElementById('csv-file').value = '';
+                    document.getElementById('csv-file-name').textContent = 'No file selected';
+                    document.getElementById('csv-file-info').classList.remove('active');
+                    document.getElementById('remove-csv').classList.add('hidden');
+
+                    // Update generate button
+                    updateGenerateButton();
+
+                    // Show status
+                    showStatus('generate', 'info', 'Using Latest CSV', 'The system will use the most recently uploaded CSV file.');
+                });
+            }
+
+            // Compare button
+            if (compareBtn) {
+                compareBtn.addEventListener('click', function() {
+                    if (!files.original || !files.comparison) {
+                        showStatus('compare', 'error', 'Missing Files', 'Please upload both text files to compare.');
+                        return;
+                    }
+
+                    // Create form data
+                    const formData = new FormData();
+                    formData.append('original', files.original);
+                    formData.append('comparison', files.comparison);
+
+                    // Show processing status
+                    showStatus('compare', 'info', 'Processing', 'Comparing the files. This may take a moment...');
+                    document.getElementById('compare-progress-bar').classList.add('active');
+
+                    // Simulate progress (in a real app, you'd get updates from the server)
+                    simulateProgress('compare-progress', function() {
+                        // Submit to server
+                        fetch('/compare_text', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Network response was not ok');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            if (data.status === 'success') {
+                                // Open the result in a new tab or download
+                                openOrDownloadResult(data.resultUrl, 'Text comparison complete');
+                            } else {
+                                showStatus('compare', 'error', 'Processing Failed', data.message);
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error:', error);
+                            showStatus('compare', 'error', 'Error', 'An error occurred during comparison: ' + error.message);
+                        })
+                        .finally(() => {
+                            document.getElementById('compare-progress-bar').classList.remove('active');
+                        });
+                    });
+                });
+            }
+
+            // Generate button
+            if (generateBtn) {
+                generateBtn.addEventListener('click', function() {
+                    if (!files.csv && !files.useLatest) {
+                        showStatus('generate', 'error', 'Missing File', 'Please upload a CSV file or choose to use the latest one.');
+                        return;
+                    }
+
+                    // Create form data
+                    const formData = new FormData();
+                    if (files.csv) {
+                        formData.append('csv', files.csv);
+                        formData.append('useLatest', 'false');
+                    } else {
+                        formData.append('useLatest', 'true');
+                    }
+
+                    // Show processing status
+                    showStatus('generate', 'info', 'Processing', 'Generating the report. This may take a moment...');
+                    document.getElementById('generate-progress-bar').classList.add('active');
+
+                    // Simulate progress
+                    simulateProgress('generate-progress', function() {
+                        // Submit to server
+                        fetch('/generate_report', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error('Network response was not ok');
+                            }
+                            return response.json();
+                        })
+                        .then(data => {
+                            if (data.status === 'success') {
+                                // Download the result
+                                openOrDownloadResult(data.resultUrl, 'Report generated successfully');
+                            } else {
+                                showStatus('generate', 'error', 'Processing Failed', data.message);
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error:', error);
+                            showStatus('generate', 'error', 'Error', 'An error occurred during report generation: ' + error.message);
+                        })
+                        .finally(() => {
+                            document.getElementById('generate-progress-bar').classList.remove('active');
+                        });
+                    });
+                });
+            }
+
+            // Helper to show status messages
+            function showStatus(section, type, title, message) {
+                const status = document.getElementById(section + '-status');
+                const statusTitle = document.getElementById(section + '-status-title');
+                const statusMessage = document.getElementById(section + '-status-message');
+
+                if (!status || !statusTitle || !statusMessage) {
+                    console.error(`Status elements not found for ${section}`);
+                    return;
+                }
+
+                status.className = 'status active';
+                if (type === 'success') {
+                    status.classList.add('success');
+                } else if (type === 'error') {
+                    status.classList.add('error');
+                }
+
+                statusTitle.textContent = title;
+                statusMessage.textContent = message;
+            }
+
+            // Helper to simulate progress
+            function simulateProgress(progressId, callback) {
+                const progressBar = document.getElementById(progressId);
+                if (!progressBar) {
+                    console.error(`Progress bar not found: ${progressId}`);
+                    callback();
+                    return;
+                }
+
+                let width = 0;
+                const interval = setInterval(function() {
+                    if (width >= 90) {
+                        clearInterval(interval);
+                        callback();
+                    } else {
+                        width += 5;
+                        progressBar.style.width = width + '%';
+                    }
+                }, 200);
+            }
+
+            // Helper to handle file download or viewing
+            function openOrDownloadResult(url, successMessage) {
+                console.log(`Processing result: ${url}`);
+
+                // If it's a text comparison, open in new tab
+                if (url.includes('compare') || url.includes('view_comparison')) {
+                    window.open(url, '_blank');
+                }
+                // Otherwise, download the file
+                else {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = '';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }
+
+                // Show success message
+                const section = url.includes('compare') ? 'compare' : 'generate';
+                showStatus(section, 'success', 'Success', successMessage);
+            }
+
+            // Initialize button states
+            updateCompareButton();
+            updateGenerateButton();
+
+            // Add debug logging
+            console.log('File upload initialization complete');
+        });
+
+        // Handle disabled navigation buttons
+        document.querySelectorAll('.nav-button.disabled').forEach(button => {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+                alert('This feature is coming soon!');
+            });
+        });
+    </script>
+</body>
+</html>

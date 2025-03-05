@@ -26,11 +26,6 @@
             font-size: 1.5rem;
             font-weight: 500;
             padding: 1rem 0;
-            cursor: pointer;
-        }
-        .title a {
-            color: white;
-            text-decoration: none;
         }
         .nav-bar {
             display: flex;
@@ -46,6 +41,10 @@
         }
         .nav-button:hover {
             background-color: rgba(255, 255, 255, 0.3);
+        }
+        .disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
         }
         .container {
             max-width: 1000px;
@@ -123,11 +122,11 @@
 </head>
 <body>
     <header>
-        <h1 class="title"><a href="/">PhillyScript</a></h1>
+        <h1 class="title"><a href="/" style="color: white; text-decoration: none;">PhillyScript</a></h1>
         <div class="nav-bar">
             <a href="/transcribe" class="nav-button">Transcribe</a>
             <a href="/diff_check" class="nav-button">Assess for Differences</a>
-            <a href="#" class="nav-button disabled">Check for Differences</a>
+            <a href="/finalise_report" class="nav-button">Finalise Report</a>
         </div>
     </header>
 
@@ -152,13 +151,13 @@
             </a>
 
             <!-- Finalise Report Button -->
-            <div class="big-button disabled">
+            <a href="/finalise_report" class="big-button">
                 <div class="button-bg" style="background-image: url('https://images.unsplash.com/photo-1517842645767-c639042777db?q=80&w=1000');"></div>
                 <div class="button-content">
                     <div class="button-title">Finalise Report</div>
                     <div class="button-desc">Generate comprehensive analysis reports</div>
                 </div>
-            </div>
+            </a>
         </div>
     </div>
 

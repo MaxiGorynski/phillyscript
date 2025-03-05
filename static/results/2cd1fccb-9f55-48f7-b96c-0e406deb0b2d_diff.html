@@ -1,0 +1,150 @@
+
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Text Comparison Results</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Arial, sans-serif;
+                margin: 20px;
+                line-height: 1.5;
+            }
+            .diff-header {
+                background-color: #4a6fa5;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+            }
+            .diff-header h1 {
+                margin: 0;
+                font-size: 24px;
+            }
+            table.diff {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 14px;
+                font-family: monospace;
+            }
+            .diff td {
+                padding: 5px;
+                border: 1px solid #ddd;
+                vertical-align: top;
+            }
+            .diff span.diff_add {
+                background-color: #e6ffe6;
+                color: green;
+                font-weight: bold;
+            }
+            .diff span.diff_sub {
+                background-color: #ffe6e6;
+                color: red;
+                text-decoration: line-through;
+            }
+            .diff span.diff_chg {
+                background-color: #fff5cc;
+                color: #996600;
+                font-weight: bold;
+            }
+            .diff th {
+                background-color: #f0f0f0;
+                padding: 5px;
+                border: 1px solid #ddd;
+                text-align: center;
+            }
+            .legend {
+                margin-top: 20px;
+                padding: 10px;
+                background-color: #f9f9f9;
+                border-radius: 5px;
+            }
+            .legend ul {
+                padding-left: 20px;
+            }
+            .back-button {
+                margin-top: 20px;
+                padding: 10px 15px;
+                background-color: #4a6fa5;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+            }
+            .back-button:hover {
+                background-color: #375d8a;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="diff-header">
+            <h1>Text Comparison Results</h1>
+        </div>
+
+        
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+          "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html>
+
+<head>
+    <meta http-equiv="Content-Type"
+          content="text/html; charset=utf-8" />
+    <title></title>
+    <style type="text/css">
+        table.diff {font-family:Courier; border:medium;}
+        .diff_header {background-color:#e0e0e0}
+        td.diff_header {text-align:right}
+        .diff_next {background-color:#c0c0c0}
+        .diff_add {background-color:#aaffaa}
+        .diff_chg {background-color:#ffff77}
+        .diff_sub {background-color:#ffaaaa}
+    </style>
+</head>
+
+<body>
+    
+    <table class="diff" id="difflib_chg_to0__top"
+           cellspacing="0" cellpadding="0" rules="groups" >
+        <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+        <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+        <thead><tr><th class="diff_next"><br /></th><th colspan="2" class="diff_header">Original Text</th><th class="diff_next"><br /></th><th colspan="2" class="diff_header">Comparison Text</th></tr></thead>
+        <tbody>
+            <tr><td class="diff_next"><a href="#difflib_chg_to0__top">t</a></td><td></td><td>&nbsp;No Differences Found&nbsp;</td><td class="diff_next"><a href="#difflib_chg_to0__top">t</a></td><td></td><td>&nbsp;No Differences Found&nbsp;</td></tr>
+        </tbody>
+    </table>
+    <table class="diff" summary="Legends">
+        <tr> <th colspan="2"> Legends </th> </tr>
+        <tr> <td> <table border="" summary="Colors">
+                      <tr><th> Colors </th> </tr>
+                      <tr><td class="diff_add">&nbsp;Added&nbsp;</td></tr>
+                      <tr><td class="diff_chg">Changed</td> </tr>
+                      <tr><td class="diff_sub">Deleted</td> </tr>
+                  </table></td>
+             <td> <table border="" summary="Links">
+                      <tr><th colspan="2"> Links </th> </tr>
+                      <tr><td>(f)irst change</td> </tr>
+                      <tr><td>(n)ext change</td> </tr>
+                      <tr><td>(t)op</td> </tr>
+                  </table></td> </tr>
+    </table>
+</body>
+
+</html>
+
+        <div class="legend">
+            <h3>Legend:</h3>
+            <ul>
+                <li><span style="color: green; font-weight: bold;">Added content</span> - Content that appears in the comparison text but not in the original</li>
+                <li><span style="color: red; text-decoration: line-through;">Removed content</span> - Content that appears in the original text but not in the comparison</li>
+                <li><span style="color: #996600; font-weight: bold;">Changed content</span> - Content that has been modified between the texts</li>
+            </ul>
+        </div>
+
+        <a href="/finalise_report" class="back-button">Back to Report Options</a>
+    </body>
+    </html>
+    
