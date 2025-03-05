@@ -20,8 +20,32 @@ import re
 from docx import Document
 from io import BytesIO
 from datetime import datetime
+from flask_login import LoginManager, login_required, current_user
+from models import db, User
+from auth import auth as auth_blueprint
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your-secret-key-goes-here'  # Change this to a random secret key
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+
+#Initialise Flask-Login
+login_manager = LoginManager()
+login_manager.login_view = 'auth.login'
+login_manager.init_app(app)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# Register the auth blueprint
+app.register_blueprint(auth_blueprint)
+
+# Create all database tables
+with app.app_context():
+    db.create_all()
 
 # Add this configuration
 app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -428,6 +452,7 @@ def index():
 
 # Add a separate route for the transcription page
 @app.route('/transcribe')
+@login_required
 def transcribe():
     try:
         return render_template('transcription_page.html')
@@ -540,6 +565,7 @@ def download_file(filename):
 
 
 @app.route('/diff_check')
+@login_required
 def diff_check():
     """Render the image difference checker page"""
     return render_template('diff_check.html')
@@ -705,12 +731,14 @@ def process_image_difference(image1_path, image2_path, output_original_path, out
 
 
 @app.route('/finalise_report')
+@login_required
 def finalise_report():
     """Render the finalise report page"""
     return render_template('finalise_report.html')
 
 
 @app.route('/compare_text', methods=['POST'])
+@login_required
 def compare_text():
     """Endpoint to handle text comparison uploads and processing"""
     if 'original' not in request.files or 'comparison' not in request.files:
@@ -790,6 +818,7 @@ def view_comparison(result_id):
     return html_content
 
 @app.route('/generate_report', methods=['POST'])
+@login_required
 def generate_report():
     """Endpoint to handle report generation from CSV"""
     use_latest = request.form.get('useLatest') == 'true'
