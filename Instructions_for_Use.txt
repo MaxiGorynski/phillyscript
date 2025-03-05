@@ -1,0 +1,9 @@
+For Transcription
+
+-Transcription is arranged in terms of 'Features' and 'Comments'
+-Open your preferred dictaphonic/voice memoing application
+-When you wish to record a new Feature in an inventory, say 'New Feature', followed by the name of the new feature
+-Then, for each comment or observation you wish to make about the feature in question, say 'Comment'
+-Each time you say 'Comment', what you say immediately after will be stored in that comment
+-When you are ready to move on to the next feature, simply say 'New Feature', followed by the name of your new feature, then add comments as before
+
