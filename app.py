@@ -1041,9 +1041,10 @@ def generate_docx_report(csv_path):
     Generate a formatted Word document from CSV data
     """
     import pandas as pd
-    from docx import Document  # Correct import
+    from docx import Document
     from docx.shared import Pt, RGBColor, Inches
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from datetime import datetime  # Add this import inside the function as well for extra safety
 
     # Read CSV data
     df = pd.read_csv(csv_path)
