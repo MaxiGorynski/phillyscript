@@ -9,6 +9,9 @@ import cv2
 import numpy as np
 import uuid
 from werkzeug.utils import secure_filename
+import threading
+from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
 
 app = Flask(__name__)
 
@@ -63,41 +66,217 @@ def convert_to_wav(audio_path):
         return str(audio_path)
 
 
-def transcribe_audio(audio_path):
+def transcribe_audio_optimized(audio_path):
     """
-    Transcribe an audio file to text using speech recognition.
+    Optimized version of transcribe_audio function with improved file path handling.
     """
-    # Convert to WAV if needed
-    wav_path = convert_to_wav(audio_path)
+    try:
+        print(f"Converting {audio_path} to WAV format...")
+        audio_path = Path(audio_path)
 
-    print("Starting transcription...")
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_path) as source:
-        print("Reading audio file...")
-        audio = recognizer.record(source)
-        try:
+        # Verify file exists
+        if not audio_path.exists():
+            print(f"Error: File does not exist: {audio_path}")
+            return ""
+
+        # Skip conversion for WAV files
+        if audio_path.suffix.lower() == '.wav':
+            wav_path = str(audio_path)
+        else:
+            # Create a temporary WAV file with optimized parameters
+            wav_path = audio_path.with_suffix('.wav')
+
+            # Convert audio to WAV with optimized parameters
+            try:
+                if audio_path.suffix.lower() == '.mp3':
+                    audio = AudioSegment.from_mp3(str(audio_path))
+                elif audio_path.suffix.lower() == '.flac':
+                    audio = AudioSegment.from_file(str(audio_path), format="flac")
+                elif audio_path.suffix.lower() == '.m4a':
+                    audio = AudioSegment.from_file(str(audio_path), format="m4a")
+                else:
+                    audio = AudioSegment.from_file(str(audio_path))
+
+                # Optimize audio for speech recognition
+                # Downsampling to 16kHz, mono, 16-bit which is optimal for most speech recognition
+                audio = audio.set_frame_rate(16000).set_channels(1)
+
+                # Export with optimized settings
+                audio.export(wav_path, format="wav", parameters=["-q:a", "0"])
+                print(f"Successfully converted to {wav_path}")
+            except Exception as e:
+                print(f"Error converting audio: {e}")
+                return ""
+
+        # Verify WAV file exists and has content
+        wav_path_obj = Path(wav_path)
+        if not wav_path_obj.exists():
+            print(f"Error: WAV file does not exist: {wav_path}")
+            return ""
+
+        if wav_path_obj.stat().st_size == 0:
+            print(f"Error: WAV file is empty: {wav_path}")
+            return ""
+
+        print("Starting transcription...")
+        recognizer = sr.Recognizer()
+
+        # Set recognition parameters for better performance
+        recognizer.energy_threshold = 300
+        recognizer.dynamic_energy_threshold = True
+        recognizer.pause_threshold = 0.8
+
+        with sr.AudioFile(str(wav_path)) as source:
+            print("Reading audio file...")
+            # Adjust for ambient noise to improve accuracy
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            # Record the audio with optimized parameters
+            audio = recognizer.record(source)
+
             print("Sending to speech recognition service...")
-            transcript = recognizer.recognize_google(audio)
+            transcript = recognizer.recognize_google(audio, language="en-US")
             print(f"Transcription received. Length: {len(transcript)} characters")
-            print(f"Transcript: {transcript}")
-            return transcript.lower()  # Convert to lowercase for easier matching
-        except sr.UnknownValueError:
-            print(f"Could not understand audio in {audio_path}")
-            return ""
-        except sr.RequestError as e:
-            print(f"Error with speech recognition service for {audio_path}; {e}")
-            return ""
-        finally:
-            # Clean up temporary WAV file if it was converted
-            if wav_path != str(audio_path):
+            print(f"Transcript: {transcript[:200]}..." if len(transcript) > 200 else f"Transcript: {transcript}")
+            return transcript.lower()
+            return transcript.lower()
+    except sr.UnknownValueError:
+        print(f"Could not understand audio in {audio_path}")
+        return ""
+    except sr.RequestError as e:
+        print(f"Error with speech recognition service for {audio_path}; {e}")
+        return ""
+    except Exception as e:
+        print(f"Unexpected error processing audio: {e}")
+        return ""
+    finally:
+        # Clean up temporary WAV file if it was converted
+        try:
+            if 'wav_path' in locals() and wav_path != str(audio_path) and Path(wav_path).exists():
                 Path(wav_path).unlink(missing_ok=True)
                 print("Cleaned up temporary WAV file")
+        except Exception as e:
+            print(f"Error cleaning up temporary file: {e}")
+
+
+def format_text(text):
+    """
+    Apply advanced formatting rules to make transcribed text more professional.
+    Uses heuristics to detect sentence boundaries and format accordingly.
+
+    Args:
+        text: Raw text string from transcription
+
+    Returns:
+        Formatted text with proper capitalization and punctuation
+    """
+    if not text:
+        return text
+
+    # Preprocessing - clean up common transcription artifacts
+    text = text.strip()
+
+    # Replace multiple spaces with a single space
+    text = ' '.join(text.split())
+
+    # Sentence boundary detection
+    # Add periods where they're likely missing between sentences
+
+    # Common indicators of sentence boundaries in speech
+    boundary_indicators = [
+        ' and then ', ' afterwards ', ' after that ', ' next ', ' following that ',
+        ' subsequently ', ' consequently ', ' as a result ', ' therefore ',
+        ' thus ', ' hence ', ' so ', ' finally ', ' lastly ', ' in conclusion ',
+        ' to sum up ', ' in summary ', ' additionally ', ' moreover ', ' furthermore ',
+        ' in addition ', ' also ', ' besides ', ' however ', ' nevertheless ',
+        ' nonetheless ', ' still ', ' yet ', ' conversely ', ' on the other hand ',
+        ' on the contrary ', ' in contrast ', ' instead ', ' alternatively ',
+        ' otherwise ', ' rather ', ' whereas ', ' while ', ' though ', ' although '
+    ]
+
+    # Add periods before these indicators if there's no punctuation
+    for indicator in boundary_indicators:
+        text = text.replace(indicator, f'. {indicator.strip()}')
+
+    # Replace common conjunctions at the start of a sentence that might indicate a boundary
+    conjunctions = [' but ', ' or ', ' nor ', ' for ', ' so ']
+    for conj in conjunctions:
+        text = text.replace(conj, f'. {conj.strip()} ')
+
+    # Split text into sentences based on existing punctuation and the indicators we added
+    # This regex will split on ., !, ? followed by a space or end of string
+    import re
+    sentences = re.split(r'([.!?])\s+', text)
+
+    # Rejoin sentences with proper spacing and formatting
+    formatted_text = ''
+    i = 0
+    while i < len(sentences):
+        if i < len(sentences) - 1 and sentences[i + 1] in '.!?':
+            # This is a sentence + its ending punctuation
+            sentence = sentences[i]
+            punct = sentences[i + 1]
+
+            # Capitalize first letter of sentence if it's not already
+            if sentence and sentence[0].islower():
+                sentence = sentence[0].upper() + sentence[1:]
+
+            formatted_text += sentence + punct + ' '
+            i += 2
+        else:
+            # This might be the last sentence or one without punctuation
+            sentence = sentences[i]
+
+            # Capitalize first letter of sentence if it's not already
+            if sentence and sentence[0].islower():
+                sentence = sentence[0].upper() + sentence[1:]
+
+            # Add period if there's no ending punctuation
+            if sentence and not sentence.endswith(('.', '!', '?')):
+                sentence += '.'
+
+            formatted_text += sentence + ' '
+            i += 1
+
+    # Final cleanup and formatting
+    formatted_text = formatted_text.strip()
+
+    # Fix common capitalization issues
+    formatted_text = re.sub(r'\bi\b', 'I', formatted_text)  # Capitalize standalone 'i'
+    formatted_text = re.sub(r'\bi\'m\b', 'I\'m', formatted_text, flags=re.IGNORECASE)
+    formatted_text = re.sub(r'\bi\'ll\b', 'I\'ll', formatted_text, flags=re.IGNORECASE)
+    formatted_text = re.sub(r'\bi\'ve\b', 'I\'ve', formatted_text, flags=re.IGNORECASE)
+    formatted_text = re.sub(r'\bi\'d\b', 'I\'d', formatted_text, flags=re.IGNORECASE)
+
+    # Capitalize proper nouns (common ones in your context)
+    proper_nouns = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+                    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+                    'september', 'october', 'november', 'december']
+
+    for noun in proper_nouns:
+        formatted_text = re.sub(r'\b' + noun + r'\b', noun.capitalize(),
+                                formatted_text, flags=re.IGNORECASE)
+
+    # Fix spacing around punctuation
+    formatted_text = re.sub(r'\s+([.,;:!?])', r'\1', formatted_text)
+
+    # Ensure consistent spacing after punctuation
+    formatted_text = re.sub(r'([.,;:!?])(\S)', r'\1 \2', formatted_text)
+
+    # Remove double periods
+    formatted_text = formatted_text.replace('..', '.')
+
+    # Ensure the text ends with proper punctuation
+    if not formatted_text[-1] in '.!?':
+        formatted_text += '.'
+
+    return formatted_text
 
 
 def process_transcript(transcript):
     """
     Process transcript text to extract features and comments.
-    Returns a list of dictionaries containing features and their comments.
+    Returns a list of dictionaries containing features and comments.
+    Also detects 'Tenant Responsibility' mentions in comments.
     """
     print("\nProcessing transcript...")
     results = []
@@ -127,6 +306,8 @@ def process_transcript(transcript):
                 i += 1
 
             current_feature = current_feature.strip()
+            # Apply text formatting to the feature
+            current_feature = format_text(current_feature)
             print(f"Found new feature: {current_feature}")
 
         # Check for "comment"
@@ -145,16 +326,28 @@ def process_transcript(transcript):
                 i += 1
 
             comment_text = comment_text.strip()
+
+            # Check for "Tenant Responsibility" in the comment
+            is_tenant_responsibility = False
+            # Convert to lowercase for case-insensitive matching
+            comment_lower = comment_text.lower()
+            if "tenant responsibility" in comment_lower:
+                is_tenant_responsibility = True
+                print("Tenant Responsibility detected in comment")
+
+            # Apply text formatting to the comment
+            comment_text = format_text(comment_text)
             print(f"Found comment: {comment_text}")
 
             # Add to results if we have a feature
             if current_feature:
                 results.append({
                     "Feature": current_feature if is_first_comment else " ",  # Empty space for subsequent comments
-                    "Comment": comment_text
+                    "Comment": comment_text,
+                    "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
                 })
-                print(
-                    f"Added row - Feature: {'[First]' if is_first_comment else '[Subsequent]'}, Comment: {comment_text}")
+                print(f"Added row - Feature: {'[First]' if is_first_comment else '[Subsequent]'}, " +
+                      f"Comment: {comment_text}, TR: {'Yes' if is_tenant_responsibility else 'No'}")
                 is_first_comment = False
 
         else:
@@ -167,7 +360,7 @@ def process_transcript(transcript):
 def process_audio_file(file_path, original_filename):
     """Process audio file and create a CSV."""
     # Transcribe the audio
-    transcript = transcribe_audio(file_path)
+    transcript = transcribe_audio_optimized(file_path)
 
     if not transcript:
         return None, "Failed to transcribe audio"
@@ -272,6 +465,7 @@ def upload_file():
     })
 
 
+# Update the process_file route to use multithreading
 @app.route('/process/<process_id>', methods=['POST'])
 def process_file(process_id):
     # Find the uploaded file
@@ -284,18 +478,40 @@ def process_file(process_id):
     original_filename = file_path.name.replace(f"{process_id}_", "")
 
     try:
-        # Process the file
-        output_path, error = process_audio_file(file_path, original_filename)
+        # Use a thread pool for parallel processing
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # Use the optimized transcription function
+            transcript_future = executor.submit(transcribe_audio_optimized, str(file_path))
 
-        if error:
-            return jsonify({'status': 'error', 'message': error})
+            # Wait for transcription to complete
+            transcript = transcript_future.result()
 
-        # Return success with the output filename
-        return jsonify({
-            'status': 'success',
-            'outputFilename': output_path.name,
-            'message': 'Processing complete'
-        })
+            if not transcript:
+                return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
+
+            # Process the transcript
+            results = process_transcript(transcript)
+
+            if not results:
+                return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
+
+            # Create DataFrame
+            df = pd.DataFrame(results)
+
+            # Generate output filename based on input audio filename
+            base_filename = Path(original_filename).stem
+            output_filename = f"{base_filename}_transcript.csv"
+            output_path = TRANSCRIPT_FOLDER / output_filename
+
+            # Save to CSV
+            df.to_csv(output_path, index=False)
+
+            # Return success with the output filename
+            return jsonify({
+                'status': 'success',
+                'outputFilename': output_path.name,
+                'message': 'Processing complete'
+            })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
     finally:
@@ -480,11 +696,16 @@ def process_image_difference(image1_path, image2_path, output_original_path, out
 
     return len(significant_contours)
 
+
 if __name__ == '__main__':
-    # Use host='0.0.0.0' to make it accessible from other devices
-    print("Starting PhillyScript server...")
+    # Determine optimal number of threads
+    num_threads = min(multiprocessing.cpu_count() * 2, 8)  # Use 2x CPU cores, max 8
+
+    print(f"Starting PhillyScript server with {num_threads} worker threads...")
     print("Available routes:")
     print("  - http://127.0.0.1:5001/ (main interface)")
-    print("  - http://127.0.0.1:5001/test (server test)")
-    print("  - http://127.0.0.1:5001/basic (basic HTML test)")
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    print("  - http://127.0.0.1:5001/transcribe (transcription page)")
+    print("  - http://127.0.0.1:5001/diff_check (image comparison)")
+
+    # Set threaded mode and optimal worker count
+    app.run(debug=True, host='0.0.0.0', port=5001, threaded=True)
