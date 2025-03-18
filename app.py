@@ -25,8 +25,8 @@ from models import db, User
 from auth import auth as auth_blueprint
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key-goes-here'  # Change this to a random secret key
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-local-only')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
@@ -57,6 +57,8 @@ TRANSCRIPT_FOLDER.mkdir(exist_ok=True)
 RESULT_FOLDER = Path('static/results')
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 RESULT_FOLDER.mkdir(exist_ok=True, parents=True)
+
+for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER, RESULT_FOLDER]: folder.mkdir(exist_ok=True, parents=True)
 
 
 def convert_to_wav(audio_path):
