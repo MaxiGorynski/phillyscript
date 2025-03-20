@@ -1,0 +1,10 @@
+*
+!application.py
+!requirements.txt
+!Procfile
+!.ebextensions/
+!.ebextensions/*
+!templates/
+!templates/*
+!static/
+!static/*
