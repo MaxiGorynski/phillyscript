@@ -31,7 +31,7 @@ ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=application.py
 
 # Expose port for the application
-EXPOSE 8000
+EXPOSE 8080
 
 # Command to run the application
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "application:application"]
