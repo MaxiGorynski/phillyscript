@@ -51,10 +51,10 @@ with application.app_context():
 application.config['TEMPLATES_AUTO_RELOAD'] = True
 
 # Create directories for uploads and transcripts
-UPLOAD_FOLDER = Path('temp_uploads')
-TRANSCRIPT_FOLDER = Path('temp_transcripts')
+UPLOAD_FOLDER = Path('/app/temp_uploads')
+TRANSCRIPT_FOLDER = Path('/app/temp_transcripts')
 TRANSCRIPT_FOLDER.mkdir(exist_ok=True)
-RESULT_FOLDER = Path('static/results')
+RESULT_FOLDER = Path('/app/static/results')
 UPLOAD_FOLDER.mkdir(exist_ok=True)
 RESULT_FOLDER.mkdir(exist_ok=True, parents=True)
 
