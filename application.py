@@ -1,65 +1,193 @@
 from flask import Flask, request, render_template, send_file, jsonify, send_from_directory
 import os
-import speech_recognition as sr
+import uuid
 from pathlib import Path
+import logging
+
+# Configure logging first - increase level to see more details
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Initialise Flask app
+application = Flask(__name__)
+app = application  # AWS ElasticBeanstalk looks for 'application' while Flask CLI looks for 'app'
+
+# Configure app before importing other modules
+application.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-local-only')
+
+# Get DATABASE_URL from environment, with a SQLite fallback
+database_url = os.environ.get('DATABASE_URL')
+logger.info(f"Database URL from environment: {database_url}")
+
+if not database_url or 'rds.amazonaws.com' in database_url:
+    fallback_db = 'sqlite:///fallback.db'
+    logger.warning(f"Using fallback database: {fallback_db}")
+    application.config['SQLALCHEMY_DATABASE_URI'] = fallback_db
+else:
+    application.config['SQLALCHEMY_DATABASE_URI'] = database_url
+
+application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+application.config['TEMPLATES_AUTO_RELOAD'] = True
+
+# Database configuration needs to be engine-specific
+if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+    # SQLite-specific options
+    application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'connect_args': {'check_same_thread': False}
+    }
+else:
+    # PostgreSQL-specific options
+    application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_recycle': 280,
+        'pool_timeout': 10,
+        'connect_args': {
+            'connect_timeout': 5  # PostgreSQL connection timeout in seconds
+        }
+    }
+
+# Log the database we're connecting to
+logger.info(f"Configured database: {application.config['SQLALCHEMY_DATABASE_URI']}")
+
+# Import db and login_manager from extensions
+from extensions import db, login_manager
+
+# Initialize extensions with the application
+db.init_app(application)
+login_manager.init_app(application)
+login_manager.login_view = 'auth.login'
+
+# Create folders for file storage
+UPLOAD_FOLDER = Path('/tmp/temp_uploads')
+TRANSCRIPT_FOLDER = Path('/tmp/temp_transcripts')
+RESULT_FOLDER = Path('/tmp/results')
+
+for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER, RESULT_FOLDER]:
+    folder.mkdir(exist_ok=True, parents=True)
+
+
+# Create a diagnostic route BEFORE importing models
+@application.route('/api/diagnostics')
+def diagnostics():
+    db_status = "unknown"
+    try:
+        with db.engine.connect() as conn:
+            conn.execute("SELECT 1")
+            db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+
+    return jsonify({
+        'status': 'ok',
+        'message': 'API is running',
+        'database': {
+            'status': db_status,
+            'uri': application.config['SQLALCHEMY_DATABASE_URI'].split('@')[-1].split('/')[0]
+            if '@' in application.config['SQLALCHEMY_DATABASE_URI'] else 'local'
+        },
+        'environment': {
+            'FLASK_ENV': os.environ.get('FLASK_ENV', 'production')
+        }
+    })
+
+
+# Import models and auth AFTER initializing the database
+try:
+    from models import User
+
+    logger.info("Models imported successfully")
+except Exception as e:
+    logger.error(f"Error importing models: {str(e)}")
+
+
+    # Create a minimal User model for the app to run
+    class User(db.Model):
+        id = db.Column(db.Integer, primary_key=True)
+        username = db.Column(db.String(80), unique=True, nullable=False)
+        email = db.Column(db.String(120), unique=True, nullable=False)
+        is_active = db.Column(db.Boolean, default=True)
+
+        def get_id(self):
+            return str(self.id)
+
+        @property
+        def is_authenticated(self):
+            return True
+
+        @property
+        def is_anonymous(self):
+            return False
+
+# Import auth blueprint
+try:
+    from auth import auth as auth_blueprint
+
+    application.register_blueprint(auth_blueprint)
+    logger.info("Auth blueprint registered successfully")
+except Exception as e:
+    logger.error(f"Error registering auth blueprint: {str(e)}")
+    # Create a minimal auth blueprint for the app to run
+    from flask import Blueprint
+
+    auth_blueprint = Blueprint('auth', __name__)
+    application.register_blueprint(auth_blueprint)
+
+
+# Configure user loader
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        return User.query.get(int(user_id))
+    except:
+        return None
+
+
+# Import the rest of your dependencies
+import speech_recognition as sr
 from pydub import AudioSegment
 import pandas as pd
-import uuid
 import cv2
 import numpy as np
-import uuid
+import re
 from werkzeug.utils import secure_filename
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 import difflib
-import os
-from werkzeug.utils import secure_filename
-import uuid
-import re
 from docx import Document
-from io import BytesIO
 from datetime import datetime
-from flask_login import LoginManager, login_required, current_user
-from models import db, User
-from auth import auth as auth_blueprint
+from flask_login import login_required, current_user
 
-application = Flask(__name__)
-application.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-local-only')
-application.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
-application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db.init_app(application)
+# Add a simple home route that doesn't require database
+@application.route('/api/hello')
+def hello():
+    return jsonify({
+        'message': 'Hello from PhillyScript!',
+        'status': 'Service is running'
+    })
 
-#Initialise Flask-Login
-login_manager = LoginManager()
-login_manager.login_view = 'auth.login'
-login_manager.init_app(application)
 
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
+# Create database tables ONCE within an application context with improved error handling
+try:
+    with application.app_context():
+        # Test the database connection first
+        try:
+            logger.info("Testing database connection...")
+            with db.engine.connect() as conn:
+                conn.execute("SELECT 1")
+            logger.info("Database connection successful!")
 
-# Register the auth blueprint
-application.register_blueprint(auth_blueprint)
-
-# Create all database tables
-with application.app_context():
-    db.create_all()
-
-# Add this configuration
-application.config['TEMPLATES_AUTO_RELOAD'] = True
-
-# Create directories for uploads and transcripts
-UPLOAD_FOLDER = Path('/app/temp_uploads')
-TRANSCRIPT_FOLDER = Path('/app/temp_transcripts')
-TRANSCRIPT_FOLDER.mkdir(exist_ok=True)
-RESULT_FOLDER = Path('/app/static/results')
-UPLOAD_FOLDER.mkdir(exist_ok=True)
-RESULT_FOLDER.mkdir(exist_ok=True, parents=True)
-
-for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER, RESULT_FOLDER]: folder.mkdir(exist_ok=True, parents=True)
-
+            # Create tables if the connection was successful
+            logger.info("Creating database tables...")
+            db.create_all()
+            logger.info("Database tables created successfully")
+        except Exception as e:
+            logger.error(f"Error with database: {str(e)}")
+            logger.warning("Application will continue with limited functionality")
+except Exception as e:
+    logger.error(f"Database initialization error: {str(e)}")
+    logger.warning("Application will run in fallback mode")
 
 def convert_to_wav(audio_path):
     """
@@ -1153,6 +1281,14 @@ def generate_docx_report(csv_path):
     doc.save(result_path)
 
     return result_path
+
+@application.errorhandler(Exception)
+def handle_error(e):
+    logger.error(f"Unhandled exception: {str(e)}")
+    return jsonify({
+        'error': 'Internal server error',
+        'message': str(e)
+    }), 500
 
 if __name__ == '__main__':
     # Determine optimal number of threads

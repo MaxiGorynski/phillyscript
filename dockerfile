@@ -4,7 +4,7 @@ FROM python:3.8
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (including audio processing libraries)
+# Install system dependencies (including audio processing libraries and PostgreSQL)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -15,6 +15,9 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     flac \
     swig \
+    postgresql-client \
+    libpq-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
@@ -34,4 +37,4 @@ ENV FLASK_APP=application.py
 EXPOSE 8080
 
 # Command to run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "application:application"]
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "application:application"]
