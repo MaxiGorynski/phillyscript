@@ -3,6 +3,7 @@ import os
 import uuid
 from pathlib import Path
 import logging
+import boto3
 
 # Configure logging first - increase level to see more details
 logging.basicConfig(level=logging.INFO,
@@ -20,12 +21,40 @@ application.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-loc
 database_url = os.environ.get('DATABASE_URL')
 logger.info(f"Database URL from environment: {database_url}")
 
+# Determine which database to use
 if not database_url or 'rds.amazonaws.com' in database_url:
     fallback_db = 'sqlite:///fallback.db'
     logger.warning(f"Using fallback database: {fallback_db}")
     application.config['SQLALCHEMY_DATABASE_URI'] = fallback_db
 else:
     application.config['SQLALCHEMY_DATABASE_URI'] = database_url
+
+# Now that the database URI is set, we can try to download from S3 if it's SQLite
+if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+    db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+    s3_bucket = os.environ.get('S3_BUCKET', 'your-backup-bucket-name')
+
+    try:
+        # Download DB from S3 if it exists
+        s3 = boto3.client('s3')
+        s3.download_file(s3_bucket, 'db_backup/' + os.path.basename(db_file), db_file)
+        logger.info(f"Downloaded database from S3: {db_file}")
+    except Exception as e:
+        logger.warning(f"Could not download database from S3: {str(e)}")
+
+# Define backup function to be used later
+def backup_db_to_s3():
+    if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+        db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        s3_bucket = os.environ.get('S3_BUCKET', 'your-backup-bucket-name')
+
+        try:
+            # Upload DB to S3
+            s3 = boto3.client('s3')
+            s3.upload_file(db_file, s3_bucket, 'db_backup/' + os.path.basename(db_file))
+            logger.info(f"Backed up database to S3: {db_file}")
+        except Exception as e:
+            logger.warning(f"Could not back up database to S3: {str(e)}")
 
 application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 application.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -48,6 +77,42 @@ else:
 
 # Log the database we're connecting to
 logger.info(f"Configured database: {application.config['SQLALCHEMY_DATABASE_URI']}")
+
+S3_AVAILABLE = False
+
+try:
+    import boto3
+    S3_AVAILABLE = True
+except ImportError:
+    logger.warning("boto3 not available, S3 integration will be disabled")
+
+
+def backup_db_to_s3():
+    if not S3_AVAILABLE:
+        logger.warning("S3 not available, skipping backup")
+        return False
+
+    if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+        db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        s3_bucket = os.environ.get('S3_BUCKET')
+
+        if not s3_bucket:
+            logger.warning("S3_BUCKET not set, skipping backup")
+            return False
+
+        try:
+            # Upload DB to S3
+            s3 = boto3.client('s3')
+            s3.upload_file(db_file, s3_bucket, 'db_backup/' + os.path.basename(db_file))
+            logger.info(f"Backed up database to S3: {db_file}")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not back up database to S3: {str(e)}")
+            return False
+    return False
+
+# Make backup function available globally
+application.backup_db_to_s3 = backup_db_to_s3
 
 # Import db and login_manager from extensions
 from extensions import db, login_manager
@@ -707,6 +772,23 @@ def diff_result(result_id):
     return render_template('diff_result.html')
 
 
+@application.route('/api/check_files/<result_id>')
+def check_files(result_id):
+    """Check if result files exist"""
+    original_path = RESULT_FOLDER / f"{result_id}_original.jpg"
+    diff_path = RESULT_FOLDER / f"{result_id}_diff.jpg"
+
+    return jsonify({
+        'result_folder': str(RESULT_FOLDER),
+        'original_exists': original_path.exists(),
+        'diff_exists': diff_path.exists(),
+        'files_in_folder': [f.name for f in RESULT_FOLDER.iterdir() if f.is_file()][:10]  # List first 10 files
+    })
+@application.route('/results/<filename>')
+def serve_result_file(filename):
+    """Serve files from the results folder"""
+    return send_from_directory(RESULT_FOLDER, filename)
+
 @application.route('/api/diff_result/<result_id>')
 def get_diff_result(result_id):
     """API endpoint to get the image comparison results"""
@@ -731,11 +813,11 @@ def get_diff_result(result_id):
             except:
                 difference_count = 0
 
-    # Return paths and metadata
+    # Return paths and metadata with UPDATED URL PATHS
     return jsonify({
         'status': 'success',
-        'originalImageUrl': f"/static/results/{result_id}_original.jpg",
-        'diffImageUrl': f"/static/results/{result_id}_diff.jpg",
+        'originalImageUrl': f"/results/{result_id}_original.jpg",  # Updated path
+        'diffImageUrl': f"/results/{result_id}_diff.jpg",         # Updated path
         'differenceCount': difference_count
     })
 

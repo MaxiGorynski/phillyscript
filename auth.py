@@ -1,10 +1,14 @@
-from flask import Blueprint, render_template, redirect, url_for, request, flash
+from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app
 from flask_login import login_user, logout_user, login_required, current_user
-from models import User
-from extensions import db
+from werkzeug.security import generate_password_hash, check_password_hash
+from models import User, db
 
 auth = Blueprint('auth', __name__)
 
+def backup_database():
+    """Backup the database if possible"""
+    if hasattr(current_app, 'backup_db_to_s3'):
+        current_app.backup_db_to_s3()
 
 @auth.route('/login')
 def login():
@@ -86,6 +90,9 @@ def signup_post():
     db.session.add(new_user)
     db.session.commit()
 
+    # Backup the database
+    backup_database()
+
     flash('Account created successfully! You can now log in.')
     return redirect(url_for('auth.login'))
 
@@ -127,6 +134,9 @@ def update_profile():
         db.session.commit()
         flash('Password updated successfully')
 
+    db.session.commit()
+    backup_database()
+
     return redirect(url_for('auth.profile'))
 
 
@@ -158,8 +168,10 @@ def toggle_user(user_id):
 
     user.is_active = not user.is_active
     db.session.commit()
+    backup_database()
 
     status = "activated" if user.is_active else "deactivated"
     flash(f'User {user.username} has been {status}')
+
 
     return redirect(url_for('auth.admin'))
