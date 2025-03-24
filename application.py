@@ -1029,18 +1029,20 @@ def view_comparison(result_id):
 
     return html_content
 
+
 @application.route('/generate_report', methods=['POST'])
 @login_required
 def generate_report():
     """Endpoint to handle report generation from CSV"""
     use_latest = request.form.get('useLatest') == 'true'
+    report_type = request.form.get('reportType', 'full')  # Default to full if not specified
 
     try:
         csv_path = None
 
         if use_latest:
             # Find the most recent CSV file in the transcripts folder
-            transcript_dir = Path('temp_transcripts')
+            transcript_dir = Path('/tmp/temp_transcripts')
             if not transcript_dir.exists():
                 return jsonify({
                     'status': 'error',
@@ -1078,8 +1080,14 @@ def generate_report():
             csv_path = UPLOAD_FOLDER / f"{result_id}_{secure_filename(csv_file.filename)}"
             csv_file.save(csv_path)
 
-        # Generate report from CSV
-        result_path = generate_docx_report(csv_path)
+        # Generate report from CSV with the specified report type
+        # For now, all report types use the same generation function
+        # In the future, you can implement different generation logic based on report_type
+
+        # Log the report type being generated
+        logger.info(f"Generating report of type: {report_type}")
+
+        result_path = generate_docx_report(csv_path, report_type)
 
         # Clean up temporary file if it was uploaded
         if not use_latest:
@@ -1088,7 +1096,7 @@ def generate_report():
         return jsonify({
             'status': 'success',
             'resultUrl': f"/download_report/{result_path.name}",
-            'message': 'Report generated successfully'
+            'message': f'Report generated successfully'
         })
 
     except Exception as e:
@@ -1096,6 +1104,7 @@ def generate_report():
         if csv_path and not use_latest and csv_path.exists():
             csv_path.unlink(missing_ok=True)
 
+        logger.error(f"Error generating report: {str(e)}")
         return jsonify({
             'status': 'error',
             'message': f'Error generating report: {str(e)}'
@@ -1277,9 +1286,16 @@ def generate_diff_html(original_text, comparison_text):
     return styled_html
 
 
-def generate_docx_report(csv_path):
+def generate_docx_report(csv_path, report_type='full'):
     """
     Generate a formatted Word document from CSV data
+
+    Args:
+        csv_path: Path to the CSV file
+        report_type: Type of report to generate ('inventory', 'full', or 'checkout')
+
+    Returns:
+        Path to the generated report
     """
     import pandas as pd
     from docx import Document
@@ -1297,8 +1313,16 @@ def generate_docx_report(csv_path):
     doc.core_properties.title = "Property Inspection Report"
     doc.core_properties.author = "PhillyScript"
 
-    # Add a title
-    title = doc.add_heading('Property Inspection Report', 0)
+    # Add a title based on report type
+    title_text = "Property Inspection Report"
+    if report_type == 'inventory':
+        title_text = "Inventory Check-In Report"
+    elif report_type == 'full':
+        title_text = "Full Check-In Report"
+    elif report_type == 'checkout':
+        title_text = "Check-Out Report"
+
+    title = doc.add_heading(title_text, 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     # Add date
@@ -1311,8 +1335,17 @@ def generate_docx_report(csv_path):
 
     # Add an introduction
     doc.add_heading('Introduction', level=1)
-    intro_text = ("This report documents the condition of the property and identifies any issues "
-                  "that require attention. Items marked with 'TR' indicate tenant responsibility.")
+
+    # Customize introduction based on report type
+    intro_text = "This report documents the condition of the property and identifies any issues that require attention."
+    if report_type == 'inventory':
+        intro_text = "This inventory check-in report documents the items present at the property and their condition at the beginning of the tenancy."
+    elif report_type == 'full':
+        intro_text = "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention."
+    elif report_type == 'checkout':
+        intro_text = "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report."
+
+    intro_text += " Items marked with 'TR' indicate tenant responsibility."
     doc.add_paragraph(intro_text)
 
     # Add a line break
@@ -1354,12 +1387,23 @@ def generate_docx_report(csv_path):
 
     # Add summary section
     doc.add_heading('Summary', level=1)
-    doc.add_paragraph("This report provides a comprehensive overview of the property's condition. "
-                      "Please address any issues identified in this report promptly.")
 
-    # Save the document
+    # Customize summary based on report type
+    summary_text = "This report provides a comprehensive overview of the property's condition."
+    if report_type == 'inventory':
+        summary_text = "This inventory check-in report provides a detailed list of all items present in the property at the beginning of the tenancy."
+    elif report_type == 'full':
+        summary_text = "This full check-in report provides a comprehensive overview of the property's condition at the beginning of the tenancy."
+    elif report_type == 'checkout':
+        summary_text = "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy."
+
+    summary_text += " Please address any issues identified in this report promptly."
+    doc.add_paragraph(summary_text)
+
+    # Save the document with report type in the filename
     result_id = str(uuid.uuid4())
-    result_path = RESULT_FOLDER / f"{result_id}_inspection_report.docx"
+    filename = f"{result_id}_{report_type}_report.docx"
+    result_path = RESULT_FOLDER / filename
     doc.save(result_path)
 
     return result_path

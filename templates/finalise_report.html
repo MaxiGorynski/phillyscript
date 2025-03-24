@@ -233,6 +233,16 @@
             margin-left: 10px;
             cursor: pointer;
         }
+        .report-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+        }
+
+        .report-type-btn {
+            width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -327,7 +337,11 @@
                 </div>
 
                 <div class="button-container">
-                    <button id="generate-btn" class="action-btn" disabled>Generate Report</button>
+                    <div class="report-buttons">
+                        <button id="generate-inventory-btn" class="action-btn report-type-btn" disabled>Generate Inventory Check-In</button>
+                        <button id="generate-full-btn" class="action-btn report-type-btn" disabled>Generate Full Check-In</button>
+                        <button id="generate-checkout-btn" class="action-btn report-type-btn" disabled>Generate Check-Out</button>
+                    </div>
                 </div>
 
                 <div id="generate-status" class="status">
@@ -458,7 +472,7 @@
                         updateCompareButton();
                     } else if (fileType === 'csv') {
                         files.useLatest = false;
-                        updateGenerateButton();
+                        updateGenerateButtons();
                     }
                 });
 
@@ -479,7 +493,7 @@
                         updateCompareButton();
                     } else if (type === 'csv') {
                         files.useLatest = false;
-                        updateGenerateButton();
+                        updateGenerateButtons();
                     }
                 }
             }
@@ -503,7 +517,7 @@
                     document.getElementById('remove-csv').classList.add('hidden');
 
                     // Update generate button
-                    updateGenerateButton();
+                    updateGenerateButtons();
 
                     // Show status
                     showStatus('generate', 'info', 'Using Latest CSV', 'The system will use the most recently uploaded CSV file.');
@@ -560,57 +574,110 @@
             }
 
             // Generate button
-            if (generateBtn) {
-                generateBtn.addEventListener('click', function() {
-                    if (!files.csv && !files.useLatest) {
-                        showStatus('generate', 'error', 'Missing File', 'Please upload a CSV file or choose to use the latest one.');
-                        return;
-                    }
+                    // References to the new buttons
+            const generateInventoryBtn = document.getElementById('generate-inventory-btn');
+            const generateFullBtn = document.getElementById('generate-full-btn');
+            const generateCheckoutBtn = document.getElementById('generate-checkout-btn');
 
-                    // Create form data
-                    const formData = new FormData();
-                    if (files.csv) {
-                        formData.append('csv', files.csv);
-                        formData.append('useLatest', 'false');
-                    } else {
-                        formData.append('useLatest', 'true');
-                    }
+            // Update button enablement function
+            function updateGenerateButtons() {
+                const enabled = files.csv || files.useLatest;
+                generateInventoryBtn.disabled = !enabled;
+                generateFullBtn.disabled = !enabled;
+                generateCheckoutBtn.disabled = !enabled;
+            }
 
-                    // Show processing status
-                    showStatus('generate', 'info', 'Processing', 'Generating the report. This may take a moment...');
-                    document.getElementById('generate-progress-bar').classList.add('active');
+            // Add event listeners for each button
+            if (generateInventoryBtn) {
+                generateInventoryBtn.addEventListener('click', function() {
+                    generateReport('inventory');
+                });
+            }
 
-                    // Simulate progress
-                    simulateProgress('generate-progress', function() {
-                        // Submit to server
-                        fetch('/generate_report', {
-                            method: 'POST',
-                            body: formData
-                        })
-                        .then(response => {
-                            if (!response.ok) {
-                                throw new Error('Network response was not ok');
-                            }
-                            return response.json();
-                        })
-                        .then(data => {
-                            if (data.status === 'success') {
-                                // Download the result
-                                openOrDownloadResult(data.resultUrl, 'Report generated successfully');
-                            } else {
-                                showStatus('generate', 'error', 'Processing Failed', data.message);
-                            }
-                        })
-                        .catch(error => {
-                            console.error('Error:', error);
-                            showStatus('generate', 'error', 'Error', 'An error occurred during report generation: ' + error.message);
-                        })
-                        .finally(() => {
-                            document.getElementById('generate-progress-bar').classList.remove('active');
-                        });
+            if (generateFullBtn) {
+                generateFullBtn.addEventListener('click', function() {
+                    generateReport('full');
+                });
+            }
+
+            if (generateCheckoutBtn) {
+                generateCheckoutBtn.addEventListener('click', function() {
+                    generateReport('checkout');
+                });
+            }
+
+            // Function to handle report generation
+            function generateReport(reportType) {
+                if (!files.csv && !files.useLatest) {
+                    showStatus('generate', 'error', 'Missing File', 'Please upload a CSV file or choose to use the latest one.');
+                    return;
+                }
+
+                // Create form data
+                const formData = new FormData();
+                if (files.csv) {
+                    formData.append('csv', files.csv);
+                    formData.append('useLatest', 'false');
+                } else {
+                    formData.append('useLatest', 'true');
+                }
+
+                // Add report type to the form data
+                formData.append('reportType', reportType);
+
+                // Show processing status based on report type
+                let processingMessage = 'Generating the report. This may take a moment...';
+                if (reportType === 'inventory') {
+                    processingMessage = 'Generating Inventory Check-In report...';
+                } else if (reportType === 'full') {
+                    processingMessage = 'Generating Full Check-In report...';
+                } else if (reportType === 'checkout') {
+                    processingMessage = 'Generating Check-Out report...';
+                }
+
+                showStatus('generate', 'info', 'Processing', processingMessage);
+                document.getElementById('generate-progress-bar').classList.add('active');
+
+                // Simulate progress
+                simulateProgress('generate-progress', function() {
+                    // Submit to server
+                    fetch('/generate_report', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Network response was not ok');
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (data.status === 'success') {
+                            // Download the result
+                            openOrDownloadResult(data.resultUrl, `${getReportTypeName(reportType)} report generated successfully`);
+                        } else {
+                            showStatus('generate', 'error', 'Processing Failed', data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        showStatus('generate', 'error', 'Error', 'An error occurred during report generation: ' + error.message);
+                    })
+                    .finally(() => {
+                        document.getElementById('generate-progress-bar').classList.remove('active');
                     });
                 });
             }
+
+    // Helper function to get friendly report type name
+    function getReportTypeName(reportType) {
+        switch(reportType) {
+            case 'inventory': return 'Inventory Check-In';
+            case 'full': return 'Full Check-In';
+            case 'checkout': return 'Check-Out';
+            default: return 'Report';
+        }
+    }
 
             // Helper to show status messages
             function showStatus(section, type, title, message) {
@@ -680,7 +747,7 @@
 
             // Initialize button states
             updateCompareButton();
-            updateGenerateButton();
+            updateGenerateButtons();
 
             // Add debug logging
             console.log('File upload initialization complete');
