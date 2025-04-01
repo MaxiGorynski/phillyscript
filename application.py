@@ -501,86 +501,144 @@ def format_text(text):
 
 def process_transcript(transcript):
     """
-    Process transcript text to extract features and comments.
-    Returns a list of dictionaries containing features and comments.
+    Process transcript text to extract room, attribute, features and comments.
+    Returns a list of dictionaries containing these elements.
     Also detects 'Tenant Responsibility' mentions in comments.
     """
     print("\nProcessing transcript...")
     results = []
-    current_feature = None
-    is_first_comment = True
+
+    # Initialize current state
+    current_room = ""
+    current_attribute = ""
+    current_feature = ""
+    current_mode = None  # Tracks what we're currently collecting (room, attribute, feature, or comment)
+
+    # Valid attributes list
+    valid_attributes = [
+        "doors", "floors", "skirting boards", "walls",
+        "cornicing", "ceilings", "fixtures and fittings", "furniture"
+    ]
 
     # Split transcript into words for easier processing
     words = transcript.split()
     i = 0
+    buffer = ""  # To collect text between markers
 
     while i < len(words):
-        # Check for "new feature"
-        if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-            # Start collecting new feature
-            current_feature = ""
-            is_first_comment = True
-            i += 2  # Skip "new feature"
+        # Detect markers that indicate a mode change
+        if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "room":
+            # Save any previous data before changing modes
+            if current_mode == "comment" and buffer and current_feature:
+                # Check for "Tenant Responsibility" in the comment
+                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
 
-            # Collect feature text until "comment" or another "new feature"
-            while i < len(words):
-                if words[i] == "comment":
-                    break
-                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-                    i -= 1  # Back up to process new feature
-                    break
-                current_feature += words[i] + " "
-                i += 1
+                # Apply text formatting to the comment
+                comment_text = format_text(buffer.strip())
 
-            current_feature = current_feature.strip()
-            # Apply text formatting to the feature
-            current_feature = format_text(current_feature)
-            print(f"Found new feature: {current_feature}")
-
-        # Check for "comment"
-        elif words[i] == "comment":
-            i += 1  # Skip "comment"
-            comment_text = ""
-
-            # Collect comment text until another "comment" or "new feature"
-            while i < len(words):
-                if words[i] == "comment":
-                    break
-                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-                    i -= 1  # Back up to process new feature
-                    break
-                comment_text += words[i] + " "
-                i += 1
-
-            comment_text = comment_text.strip()
-
-            # Check for "Tenant Responsibility" in the comment
-            is_tenant_responsibility = False
-            # Convert to lowercase for case-insensitive matching
-            comment_lower = comment_text.lower()
-            if "tenant responsibility" in comment_lower:
-                is_tenant_responsibility = True
-                print("Tenant Responsibility detected in comment")
-
-            # Apply text formatting to the comment
-            comment_text = format_text(comment_text)
-            print(f"Found comment: {comment_text}")
-
-            # Add to results if we have a feature
-            if current_feature:
                 results.append({
-                    "Feature": current_feature if is_first_comment else " ",  # Empty space for subsequent comments
+                    "Room": current_room,
+                    "Attribute": current_attribute,
+                    "Feature": current_feature,
                     "Comment": comment_text,
                     "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
                 })
-                print(f"Added row - Feature: {'[First]' if is_first_comment else '[Subsequent]'}, " +
-                      f"Comment: {comment_text}, TR: {'Yes' if is_tenant_responsibility else 'No'}")
-                is_first_comment = False
+                print(f"Added comment: {comment_text}")
+                buffer = ""
 
-        else:
-            i += 1
+            # Change to room collection mode
+            current_mode = "room"
+            buffer = ""  # Reset buffer for new room
+            i += 2  # Skip "new room"
+            continue
 
-    print(f"\nProcessed {len(results)} feature-comment pairs")
+        elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "attribute":
+            # Save room data if changing from room mode
+            if current_mode == "room" and buffer:
+                current_room = format_text(buffer.strip())
+                print(f"Set current room to: {current_room}")
+
+            # Change to attribute collection mode
+            current_mode = "attribute"
+            buffer = ""  # Reset buffer for new attribute
+            i += 2  # Skip "new attribute"
+            continue
+
+        elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
+            # Save attribute data if changing from attribute mode
+            if current_mode == "attribute" and buffer:
+                # Normalize and validate attribute
+                normalized_buffer = buffer.strip().lower()
+                if any(attr == normalized_buffer for attr in valid_attributes):
+                    current_attribute = normalized_buffer.title()  # Capitalize properly
+                    print(f"Set current attribute to: {current_attribute}")
+                else:
+                    closest_match = min(valid_attributes, key=lambda x:
+                    sum(1 for a, b in zip(x, normalized_buffer) if a != b))
+                    current_attribute = closest_match.title()  # Use closest match
+                    print(f"Invalid attribute '{normalized_buffer}', using closest match: {current_attribute}")
+
+            # Change to feature collection mode
+            current_mode = "feature"
+            buffer = ""  # Reset buffer for new feature
+            i += 2  # Skip "new feature"
+            continue
+
+        elif words[i] == "comment":
+            # Save feature data if changing from feature mode
+            if current_mode == "feature" and buffer:
+                current_feature = format_text(buffer.strip())
+                print(f"Set current feature to: {current_feature}")
+
+            # If we're already in comment mode, this means it's a new comment
+            # Save the previous comment first
+            if current_mode == "comment" and buffer and current_feature:
+                # Check for "Tenant Responsibility" in the comment
+                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+
+                # Apply text formatting to the comment
+                comment_text = format_text(buffer.strip())
+
+                results.append({
+                    "Room": current_room,
+                    "Attribute": current_attribute,
+                    "Feature": current_feature,
+                    "Comment": comment_text,
+                    "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
+                })
+                print(f"Added comment: {comment_text}")
+
+            # Change to comment collection mode
+            current_mode = "comment"
+            buffer = ""  # Reset buffer for new comment
+            i += 1  # Skip "comment"
+            continue
+
+        # Add current word to the buffer if we're in a collection mode
+        if current_mode:
+            buffer += words[i] + " "
+
+        # Move to next word
+        i += 1
+
+    # Handle any remaining data in the buffer
+    if current_mode == "comment" and buffer and current_feature:
+        # Check for "Tenant Responsibility" in the comment
+        is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+
+        # Apply text formatting to the comment
+        comment_text = format_text(buffer.strip())
+
+        results.append({
+            "Room": current_room,
+            "Attribute": current_attribute,
+            "Feature": current_feature,
+            "Comment": comment_text,
+            "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
+        })
+        print(f"Added final comment: {comment_text}")
+
+    print(f"\nProcessed {len(results)} entries")
     return results
 
 
@@ -1288,7 +1346,7 @@ def generate_diff_html(original_text, comparison_text):
 
 def generate_docx_report(csv_path, report_type='full'):
     """
-    Generate a formatted Word document from CSV data
+    Generate a formatted Word document from CSV data using templates
 
     Args:
         csv_path: Path to the CSV file
@@ -1301,7 +1359,7 @@ def generate_docx_report(csv_path, report_type='full'):
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from datetime import datetime  # Add this import inside the function as well for extra safety
+    from datetime import datetime
 
     # Read CSV data
     df = pd.read_csv(csv_path)
@@ -1313,92 +1371,241 @@ def generate_docx_report(csv_path, report_type='full'):
     doc.core_properties.title = "Property Inspection Report"
     doc.core_properties.author = "PhillyScript"
 
-    # Add a title based on report type
-    title_text = "Property Inspection Report"
+    # Format document based on report type
     if report_type == 'inventory':
-        title_text = "Inventory Check-In Report"
+        # INVENTORY CHECK-IN REPORT FORMAT
+
+        # Add title
+        title = doc.add_heading('INVENTORY', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add And
+        and_heading = doc.add_heading('And', 0)
+        and_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add CHECK IN
+        checkin_heading = doc.add_heading('CHECK IN', 0)
+        checkin_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add subtitle
+        subtitle = doc.add_paragraph('Of the contents and conditions for')
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add property address placeholder
+        address_para = doc.add_paragraph('[House Address]')
+        address_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add date of inspection
+        date_para = doc.add_paragraph(f"Date of inspection: {datetime.now().strftime('%B %d, %Y')}")
+        date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add prepared by
+        prepared_para = doc.add_paragraph('PREPARED BY: PhillyScript')
+        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add important information heading
+        info_heading = doc.add_heading('Important Information', level=1)
+        info_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+        # Add important information text
+        info_text = doc.add_paragraph(
+            "The Tenant /Tenant's representative and landlord should sign this document to signify that they have read and understood each page and accept that this Inventory and Check in is a true and accurate representation at the date so specified of the Property at the address stated above. Amendments to this document may be made within 5 days from the date the report is sent out. If no amendments are made within this time the parties will be deemed to accept the document as an accurate representation at the date so specified of the property at the address so stated above without the need for signature. This document should be returned, signed and dated no later than 5 days from the date the report is sent out.")
+
+        # Add table of contents heading
+        toc_heading = doc.add_heading('Table of Contents', level=1)
+
+        # Add placeholder table of contents
+        toc = doc.add_table(rows=1, cols=2)
+        toc.style = 'Table Grid'
+        header_cells = toc.rows[0].cells
+        header_cells[0].text = 'Contents'
+        header_cells[1].text = 'Page number'
+
+        # Add disclaimers section (this would normally be several pages)
+        doc.add_heading('INVENTORY DISCLAIMERS', level=1)
+
+        disclaimer_table = doc.add_table(rows=10, cols=2)
+        disclaimer_table.style = 'Table Grid'
+
+        # Add sample disclaimer content
+        disclaimer_rows = [
+            ("1.", "Structural", "This Inventory does not constitute a structural survey of the Property."),
+            ("2.", "General",
+             "This Inventory has been prepared on the accepted principle that all items are free from any obvious damage, fault or soiling except where stated."),
+            ("3.", "Description",
+             "Where the words 'gold', 'brass', 'oak', 'walnut' etc are used, it is understood that this is a description of the colour and type of the item and not the actual fabric, unless documentary evidence is available."),
+            # Add more rows as needed
+        ]
+
+        for i, (num, title, desc) in enumerate(disclaimer_rows[:3]):  # Just add first 3 for example
+            cells = disclaimer_table.rows[i].cells
+            cells[0].text = num + " " + title
+            cells[1].text = desc
+
+        # Add a page break before CSV data section
+        doc.add_page_break()
+
+        # Now add a heading for the property details section where CSV data will go
+        doc.add_heading('Property Details', level=1)
+
+        # CSV DATA INSERTION POINT
+        # Process each row in the CSV to add features and comments
+        current_feature = None
+
+        for index, row in df.iterrows():
+            feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
+                'Feature'].strip() else None
+            comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
+
+            # Check for tenant responsibility
+            is_tenant_responsibility = False
+            if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
+                is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
+
+            # If this is a new feature, add a subheading
+            if feature and feature != " ":
+                current_feature = feature
+                doc.add_heading(feature, level=2)
+
+            # Add the comment as a paragraph
+            if comment:
+                p = doc.add_paragraph()
+                p.style = 'List Bullet'
+                comment_run = p.add_run(comment)
+
+                # If tenant responsibility, add indicator and style
+                if is_tenant_responsibility:
+                    tr_run = p.add_run(" [TR]")
+                    tr_run.bold = True
+                    tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
+
+        # Add a page break before declaration section
+        doc.add_page_break()
+
+        # Add tenant and landlord declaration section
+        doc.add_heading('TENANT DECLARATION', level=1)
+        doc.add_paragraph(
+            "The items listed in this inventory/check in have been inspected and found to be in the condition indicated.")
+        doc.add_paragraph(
+            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
+
+        # Add signature fields
+        doc.add_paragraph("Name …………………………………………………………………")
+        doc.add_paragraph("Signed for the Tenant ……………………………………………………")
+
+        doc.add_heading('LANDLORD DECLARATION', level=1)
+        doc.add_paragraph(
+            "The items listed in this inventory/check in have been inspected and found to be in the condition indicated.")
+        doc.add_paragraph(
+            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
+
+        # Add signature fields
+        doc.add_paragraph("Name ……………………………………………………………………")
+        doc.add_paragraph("Signed for the Landlord …………………………………………………")
+
     elif report_type == 'full':
-        title_text = "Full Check-In Report"
+        # FULL CHECK-IN REPORT FORMAT
+        title = doc.add_heading('Full Check-In Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention. Items marked with 'TR' indicate tenant responsibility.")
+
+        # Add CSV data
+        doc.add_heading('Inspection Details', level=1)
+
+        # Process each row in the CSV
+        current_feature = None
+        for index, row in df.iterrows():
+            feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
+                'Feature'].strip() else None
+            comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
+
+            # Check for tenant responsibility
+            is_tenant_responsibility = False
+            if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
+                is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
+
+            # If this is a new feature, add a subheading
+            if feature and feature != " ":
+                current_feature = feature
+                doc.add_heading(feature, level=2)
+
+            # Add the comment as a paragraph
+            if comment:
+                p = doc.add_paragraph()
+                p.style = 'List Bullet'
+                comment_run = p.add_run(comment)
+
+                # If tenant responsibility, add indicator and style
+                if is_tenant_responsibility:
+                    tr_run = p.add_run(" [TR]")
+                    tr_run.bold = True
+                    tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
+
+        # Add summary
+        doc.add_heading('Summary', level=1)
+        doc.add_paragraph(
+            "This full check-in report provides a comprehensive overview of the property's condition at the beginning of the tenancy. Please address any issues identified in this report promptly.")
+
     elif report_type == 'checkout':
-        title_text = "Check-Out Report"
+        # CHECK-OUT REPORT FORMAT
+        title = doc.add_heading('Check-Out Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    title = doc.add_heading(title_text, 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    # Add date
-    date_paragraph = doc.add_paragraph()
-    date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
-    date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report. Items marked with 'TR' indicate tenant responsibility.")
 
-    # Add a line break
-    doc.add_paragraph()
+        # Add CSV data
+        doc.add_heading('Inspection Details', level=1)
 
-    # Add an introduction
-    doc.add_heading('Introduction', level=1)
+        # Process each row in the CSV
+        current_feature = None
+        for index, row in df.iterrows():
+            feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
+                'Feature'].strip() else None
+            comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
 
-    # Customize introduction based on report type
-    intro_text = "This report documents the condition of the property and identifies any issues that require attention."
-    if report_type == 'inventory':
-        intro_text = "This inventory check-in report documents the items present at the property and their condition at the beginning of the tenancy."
-    elif report_type == 'full':
-        intro_text = "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention."
-    elif report_type == 'checkout':
-        intro_text = "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report."
+            # Check for tenant responsibility
+            is_tenant_responsibility = False
+            if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
+                is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
 
-    intro_text += " Items marked with 'TR' indicate tenant responsibility."
-    doc.add_paragraph(intro_text)
+            # If this is a new feature, add a subheading
+            if feature and feature != " ":
+                current_feature = feature
+                doc.add_heading(feature, level=2)
 
-    # Add a line break
-    doc.add_paragraph()
+            # Add the comment as a paragraph
+            if comment:
+                p = doc.add_paragraph()
+                p.style = 'List Bullet'
+                comment_run = p.add_run(comment)
 
-    # Add section for features and comments
-    doc.add_heading('Inspection Details', level=1)
+                # If tenant responsibility, add indicator and style
+                if is_tenant_responsibility:
+                    tr_run = p.add_run(" [TR]")
+                    tr_run.bold = True
+                    tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
 
-    # Track current feature for grouping comments
-    current_feature = None
-
-    # Process each row in the CSV
-    for index, row in df.iterrows():
-        feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
-            'Feature'].strip() else None
-        comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
-
-        # Check for tenant responsibility
-        is_tenant_responsibility = False
-        if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
-            is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
-
-        # If this is a new feature, add a subheading
-        if feature and feature != " ":
-            current_feature = feature
-            doc.add_heading(feature, level=2)
-
-        # Add the comment as a paragraph
-        if comment:
-            p = doc.add_paragraph()
-            p.style = 'List Bullet'
-            comment_run = p.add_run(comment)
-
-            # If tenant responsibility, add indicator and style
-            if is_tenant_responsibility:
-                tr_run = p.add_run(" [TR]")
-                tr_run.bold = True
-                tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
-
-    # Add summary section
-    doc.add_heading('Summary', level=1)
-
-    # Customize summary based on report type
-    summary_text = "This report provides a comprehensive overview of the property's condition."
-    if report_type == 'inventory':
-        summary_text = "This inventory check-in report provides a detailed list of all items present in the property at the beginning of the tenancy."
-    elif report_type == 'full':
-        summary_text = "This full check-in report provides a comprehensive overview of the property's condition at the beginning of the tenancy."
-    elif report_type == 'checkout':
-        summary_text = "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy."
-
-    summary_text += " Please address any issues identified in this report promptly."
-    doc.add_paragraph(summary_text)
+        # Add summary
+        doc.add_heading('Summary', level=1)
+        doc.add_paragraph(
+            "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy. Any discrepancies with the check-in report have been noted.")
 
     # Save the document with report type in the filename
     result_id = str(uuid.uuid4())

@@ -66,71 +66,123 @@ def transcribe_audio(audio_path):
 
 def process_transcript(transcript):
     """
-    Process transcript text to extract features and comments.
-    Returns a list of dictionaries containing features and their comments.
+    Process transcript text to extract room, attribute, features and comments.
+    Returns a list of dictionaries containing these elements.
     """
     print("\nProcessing transcript...")
     results = []
-    current_feature = None
-    is_first_comment = True
+
+    # Initialize current state
+    current_room = ""
+    current_attribute = ""
+    current_feature = ""
+    current_mode = None  # Tracks what we're currently collecting (room, attribute, feature, or comment)
+
+    # Valid attributes list
+    valid_attributes = [
+        "doors", "floors", "skirting boards", "walls",
+        "cornicing", "ceilings", "fixtures and fittings", "furniture"
+    ]
 
     # Split transcript into words for easier processing
     words = transcript.split()
     i = 0
+    buffer = ""  # To collect text between markers
 
     while i < len(words):
-        # Check for "new feature"
-        if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-            # Start collecting new feature
-            current_feature = ""
-            is_first_comment = True
-            i += 2  # Skip "new feature"
-
-            # Collect feature text until "comment" or another "new feature"
-            while i < len(words):
-                if words[i] == "comment":
-                    break
-                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-                    i -= 1  # Back up to process new feature
-                    break
-                current_feature += words[i] + " "
-                i += 1
-
-            current_feature = current_feature.strip()
-            print(f"Found new feature: {current_feature}")
-
-        # Check for "comment"
-        elif words[i] == "comment":
-            i += 1  # Skip "comment"
-            comment_text = ""
-
-            # Collect comment text until another "comment" or "new feature"
-            while i < len(words):
-                if words[i] == "comment":
-                    break
-                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-                    i -= 1  # Back up to process new feature
-                    break
-                comment_text += words[i] + " "
-                i += 1
-
-            comment_text = comment_text.strip()
-            print(f"Found comment: {comment_text}")
-
-            # Add to results if we have a feature
-            if current_feature:
+        # Detect markers that indicate a mode change
+        if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "room":
+            # Save any previous data before changing modes
+            if current_mode == "comment" and buffer and current_feature:
                 results.append({
-                    "Feature": current_feature if is_first_comment else " ",  # Empty space for subsequent comments
-                    "Comment": comment_text
+                    "Room": current_room,
+                    "Attribute": current_attribute,
+                    "Feature": current_feature,
+                    "Comment": buffer.strip()
                 })
-                print(
-                    f"Added row - Feature: {'[First]' if is_first_comment else '[Subsequent]'}, Comment: {comment_text}")
-                is_first_comment = False
+                print(f"Added comment: {buffer.strip()}")
+                buffer = ""
 
-        else:
-            i += 1
+            # Change to room collection mode
+            current_mode = "room"
+            buffer = ""  # Reset buffer for new room
+            i += 2  # Skip "new room"
+            continue
 
-    print(f"\nProcessed {len(results)} feature-comment pairs")
+        elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "attribute":
+            # Save room data if changing from room mode
+            if current_mode == "room" and buffer:
+                current_room = buffer.strip()
+                print(f"Set current room to: {current_room}")
+
+            # Change to attribute collection mode
+            current_mode = "attribute"
+            buffer = ""  # Reset buffer for new attribute
+            i += 2  # Skip "new attribute"
+            continue
+
+        elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
+            # Save attribute data if changing from attribute mode
+            if current_mode == "attribute" and buffer:
+                # Normalize and validate attribute
+                normalized_buffer = buffer.strip().lower()
+                if any(attr == normalized_buffer for attr in valid_attributes):
+                    current_attribute = normalized_buffer.title()  # Capitalize properly
+                    print(f"Set current attribute to: {current_attribute}")
+                else:
+                    closest_match = min(valid_attributes, key=lambda x:
+                    sum(1 for a, b in zip(x, normalized_buffer) if a != b))
+                    current_attribute = closest_match.title()  # Use closest match
+                    print(f"Invalid attribute '{normalized_buffer}', using closest match: {current_attribute}")
+
+            # Change to feature collection mode
+            current_mode = "feature"
+            current_feature = ""  # Reset feature for new one
+            buffer = ""  # Reset buffer for new feature
+            i += 2  # Skip "new feature"
+            continue
+
+        elif words[i] == "comment":
+            # Save feature data if changing from feature mode
+            if current_mode == "feature" and buffer:
+                current_feature = buffer.strip()
+                print(f"Set current feature to: {current_feature}")
+
+            # If we're already in comment mode, this means it's a new comment
+            # Save the previous comment first
+            if current_mode == "comment" and buffer and current_feature:
+                results.append({
+                    "Room": current_room,
+                    "Attribute": current_attribute,
+                    "Feature": current_feature,
+                    "Comment": buffer.strip()
+                })
+                print(f"Added comment: {buffer.strip()}")
+
+            # Change to comment collection mode
+            current_mode = "comment"
+            buffer = ""  # Reset buffer for new comment
+            i += 1  # Skip "comment"
+            continue
+
+        # Add current word to the buffer if we're in a collection mode
+        if current_mode:
+            buffer += words[i] + " "
+
+        # Move to next word
+        i += 1
+
+    # Handle any remaining data in the buffer
+    if current_mode == "comment" and buffer and current_feature:
+        results.append({
+            "Room": current_room,
+            "Attribute": current_attribute,
+            "Feature": current_feature,
+            "Comment": buffer.strip()
+        })
+        print(f"Added final comment: {buffer.strip()}")
+
+    print(f"\nProcessed {len(results)} entries")
     return results
 
 
@@ -171,10 +223,10 @@ def main():
 
                     df.to_csv(output_path, index=False)
                     print(f"\nResults saved to {output_path}")
-                    print("\nExtracted features and comments:")
+                    print("\nExtracted room, attribute, feature, and comments:")
                     print(df)
                 else:
-                    print(f"No features found in {audio_file.name}")
+                    print(f"No data found in {audio_file.name}")
             else:
                 print("No transcript was generated for this file")
 
