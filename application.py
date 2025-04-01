@@ -504,6 +504,7 @@ def process_transcript(transcript):
     Process transcript text to extract room, attribute, features and comments.
     Returns a list of dictionaries containing these elements.
     Also detects 'Tenant Responsibility' mentions in comments.
+    Room, Attribute, and Feature values only appear in the first row they're mentioned.
     """
     print("\nProcessing transcript...")
     results = []
@@ -513,6 +514,11 @@ def process_transcript(transcript):
     current_attribute = ""
     current_feature = ""
     current_mode = None  # Tracks what we're currently collecting (room, attribute, feature, or comment)
+
+    # Track what we've already written to output
+    written_room = None
+    written_attribute = None
+    written_feature = None
 
     # Valid attributes list
     valid_attributes = [
@@ -536,10 +542,20 @@ def process_transcript(transcript):
                 # Apply text formatting to the comment
                 comment_text = format_text(buffer.strip())
 
+                # Determine which fields to include in this row
+                output_room = current_room if written_room != current_room else ""
+                output_attribute = current_attribute if written_attribute != current_attribute else ""
+                output_feature = current_feature if written_feature != current_feature else ""
+
+                # Update tracking of written fields
+                written_room = current_room
+                written_attribute = current_attribute
+                written_feature = current_feature
+
                 results.append({
-                    "Room": current_room,
-                    "Attribute": current_attribute,
-                    "Feature": current_feature,
+                    "Room": output_room,
+                    "Attribute": output_attribute,
+                    "Feature": output_feature,
                     "Comment": comment_text,
                     "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
                 })
@@ -549,18 +565,29 @@ def process_transcript(transcript):
             # Change to room collection mode
             current_mode = "room"
             buffer = ""  # Reset buffer for new room
+            # Reset tracking for written values when room changes
+            written_room = None
+            written_attribute = None
+            written_feature = None
             i += 2  # Skip "new room"
             continue
 
         elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "attribute":
             # Save room data if changing from room mode
             if current_mode == "room" and buffer:
-                current_room = format_text(buffer.strip())
+                # Remove any periods from the end of the room name
+                cleaned_buffer = buffer.strip()
+                if cleaned_buffer.endswith('.'):
+                    cleaned_buffer = cleaned_buffer[:-1]
+                current_room = cleaned_buffer
                 print(f"Set current room to: {current_room}")
 
             # Change to attribute collection mode
             current_mode = "attribute"
             buffer = ""  # Reset buffer for new attribute
+            # Reset tracking for written attribute and feature when attribute changes
+            written_attribute = None
+            written_feature = None
             i += 2  # Skip "new attribute"
             continue
 
@@ -568,7 +595,11 @@ def process_transcript(transcript):
             # Save attribute data if changing from attribute mode
             if current_mode == "attribute" and buffer:
                 # Normalize and validate attribute
-                normalized_buffer = buffer.strip().lower()
+                cleaned_buffer = buffer.strip()
+                if cleaned_buffer.endswith('.'):
+                    cleaned_buffer = cleaned_buffer[:-1]
+                normalized_buffer = cleaned_buffer.lower()
+
                 if any(attr == normalized_buffer for attr in valid_attributes):
                     current_attribute = normalized_buffer.title()  # Capitalize properly
                     print(f"Set current attribute to: {current_attribute}")
@@ -581,13 +612,19 @@ def process_transcript(transcript):
             # Change to feature collection mode
             current_mode = "feature"
             buffer = ""  # Reset buffer for new feature
+            # Reset tracking for written feature when feature changes
+            written_feature = None
             i += 2  # Skip "new feature"
             continue
 
         elif words[i] == "comment":
             # Save feature data if changing from feature mode
             if current_mode == "feature" and buffer:
-                current_feature = format_text(buffer.strip())
+                # Remove any periods from the end of the feature name
+                cleaned_buffer = buffer.strip()
+                if cleaned_buffer.endswith('.'):
+                    cleaned_buffer = cleaned_buffer[:-1]
+                current_feature = cleaned_buffer
                 print(f"Set current feature to: {current_feature}")
 
             # If we're already in comment mode, this means it's a new comment
@@ -599,10 +636,20 @@ def process_transcript(transcript):
                 # Apply text formatting to the comment
                 comment_text = format_text(buffer.strip())
 
+                # Determine which fields to include in this row
+                output_room = current_room if written_room != current_room else ""
+                output_attribute = current_attribute if written_attribute != current_attribute else ""
+                output_feature = current_feature if written_feature != current_feature else ""
+
+                # Update tracking of written fields
+                written_room = current_room
+                written_attribute = current_attribute
+                written_feature = current_feature
+
                 results.append({
-                    "Room": current_room,
-                    "Attribute": current_attribute,
-                    "Feature": current_feature,
+                    "Room": output_room,
+                    "Attribute": output_attribute,
+                    "Feature": output_feature,
                     "Comment": comment_text,
                     "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
                 })
@@ -629,10 +676,15 @@ def process_transcript(transcript):
         # Apply text formatting to the comment
         comment_text = format_text(buffer.strip())
 
+        # Determine which fields to include in this row
+        output_room = current_room if written_room != current_room else ""
+        output_attribute = current_attribute if written_attribute != current_attribute else ""
+        output_feature = current_feature if written_feature != current_feature else ""
+
         results.append({
-            "Room": current_room,
-            "Attribute": current_attribute,
-            "Feature": current_feature,
+            "Room": output_room,
+            "Attribute": output_attribute,
+            "Feature": output_feature,
             "Comment": comment_text,
             "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
         })
