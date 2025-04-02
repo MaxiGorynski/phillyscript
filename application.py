@@ -4,6 +4,9 @@ import uuid
 from pathlib import Path
 import logging
 import boto3
+from io import BytesIO
+import logging
+import shutil
 
 # Configure logging first - increase level to see more details
 logging.basicConfig(level=logging.INFO,
@@ -1845,17 +1848,22 @@ def generate_enhanced_report():
 
         # Process uploaded images for each room
         room_images = {}
+
+        # Check if any image files were uploaded
         for key in request.files:
             if key.startswith('roomImages['):
                 # Extract room name from the input name format: roomImages[Room Name]
                 room_name = key[11:-1]  # Extract what's between 'roomImages[' and ']'
 
-                # Save the images temporarily
+                # Get all files for this room
                 files = request.files.getlist(key)
-                room_images[room_name] = []
 
+                if not room_name in room_images:
+                    room_images[room_name] = []
+
+                # Save the images temporarily
                 for file in files:
-                    if file.filename:
+                    if file and file.filename:
                         # Generate a unique filename
                         img_id = str(uuid.uuid4())
                         img_ext = Path(secure_filename(file.filename)).suffix
@@ -1864,6 +1872,9 @@ def generate_enhanced_report():
                         # Save the image
                         file.save(img_path)
                         room_images[room_name].append(str(img_path))
+
+                        # Log the image save
+                        logging.info(f"Saved image for room '{room_name}': {img_path}")
 
         # Generate the enhanced report
         result_path = generate_enhanced_docx_report(
@@ -1887,11 +1898,103 @@ def generate_enhanced_report():
         })
 
     except Exception as e:
+        logging.error(f"Error generating report: {str(e)}", exc_info=True)
         return jsonify({
             'status': 'error',
             'message': f'Error generating report: {str(e)}'
         })
 
+
+@application.route('/api/get_csv_rooms')
+@login_required
+def get_csv_rooms():
+    """API endpoint to get rooms from a CSV file"""
+    csv_id = request.args.get('csvId')
+
+    if not csv_id:
+        return jsonify({
+            'status': 'error',
+            'message': 'Missing csvId parameter'
+        })
+
+    # Find the CSV file
+    csv_path = None
+    if csv_id == 'latest':
+        # Find the most recent CSV file
+        transcript_dir = Path('/tmp/temp_transcripts')
+        if not transcript_dir.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'No transcript directory found'
+            })
+
+        csv_files = list(transcript_dir.glob('*.csv'))
+        if not csv_files:
+            return jsonify({
+                'status': 'error',
+                'message': 'No CSV files found'
+            })
+
+        # Sort by modification time, newest first
+        csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        csv_path = csv_files[0]
+    else:
+        # Find the specific CSV file - try both locations
+        csv_path_upload = UPLOAD_FOLDER / f"{csv_id}.csv"
+        csv_path_transcript = TRANSCRIPT_FOLDER / f"{csv_id}.csv"
+
+        if csv_path_upload.exists():
+            csv_path = csv_path_upload
+        elif csv_path_transcript.exists():
+            csv_path = csv_path_transcript
+        else:
+            # Try to see if the full filename was passed
+            for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER]:
+                potential_path = folder / csv_id
+                if potential_path.exists():
+                    csv_path = potential_path
+                    break
+
+            if not csv_path:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'CSV file not found'
+                })
+
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_path)
+
+        # Extract unique room names (non-empty ones)
+        rooms = []
+        current_room = None
+
+        for _, row in df.iterrows():
+            room_col = 'Room' if 'Room' in df.columns else None
+            if not room_col:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Room column not found in CSV'
+                })
+
+            room = row[room_col].strip() if pd.notna(row[room_col]) and row[room_col].strip() else None
+            if room:
+                current_room = room
+                if current_room not in rooms:
+                    rooms.append(current_room)
+
+        # Convert room names to lowercase for consistency
+        rooms = [room.lower() for room in rooms]
+
+        return jsonify({
+            'status': 'success',
+            'rooms': rooms
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing CSV: {str(e)}'
+        })
 
 def generate_enhanced_docx_report(csv_path, report_type, address, inspection_date, on_behalf_of, room_images):
     """
@@ -1982,34 +2085,33 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
             # Add subheading for images
             img_heading = doc.add_heading('Room Images', level=2)
 
-            # Determine how many images to add per row (2 or 3 depending on number of images)
-            num_images = len(room_images[room])
-            images_per_row = 2 if num_images > 4 else 3
+            # Simply add each image in sequence with a paragraph break between them
+            for i, img_path in enumerate(room_images[room]):
+                try:
+                    # Create a paragraph for the image
+                    p = doc.add_paragraph()
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-            # Add images in rows
-            for i in range(0, num_images, images_per_row):
-                # Create a table for this row of images
-                img_table = doc.add_table(rows=1, cols=images_per_row)
-                img_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+                    # Add the image to the paragraph
+                    run = p.add_run()
+                    run.add_picture(img_path, width=Inches(5.0))  # Standard width that fits the page
 
-                # Add images to the table cells
-                for j in range(images_per_row):
-                    if i + j < num_images:
-                        img_path = room_images[room][i + j]
-                        cell = img_table.cell(0, j)
+                    # Add caption
+                    caption = doc.add_paragraph(f"Image {i + 1}")
+                    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    caption.style = 'Caption'
 
-                        try:
-                            # Try to add the image to the cell
-                            paragraph = cell.paragraphs[0]
-                            run = paragraph.add_run()
-                            run.add_picture(img_path, width=Inches(2.0))
-                        except Exception as e:
-                            # If adding the image fails, add a placeholder text
-                            cell.text = f"[Image {i + j + 1}]"
-                            print(f"Error adding image: {str(e)}")
+                    # Add some space
+                    doc.add_paragraph()
 
-                # Add some space after the table
-                doc.add_paragraph()
+                except Exception as e:
+                    # If adding the image fails, add a placeholder text
+                    p = doc.add_paragraph(f"[Image {i + 1} could not be displayed]")
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    logging.error(f"Error adding image to report: {str(e)}")
+
+                    # Add space even if the image fails
+                    doc.add_paragraph()
 
         # Create a table for this room's inventory items
         # Columns: Attribute, Feature, Comment, Tenant Responsibility (TR)

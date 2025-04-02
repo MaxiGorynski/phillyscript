@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PhillyScript - Enhanced Report Builder</title>
+    <title>PhillyScript - Report Builder</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -118,19 +118,22 @@
         .image-upload-container {
             border: 2px dashed #4a6fa5;
             border-radius: 8px;
-            padding: 2rem;
+            padding: 1.5rem;
             text-align: center;
             background-color: rgba(74, 111, 165, 0.05);
             transition: all 0.3s ease;
             cursor: pointer;
         }
-        .image-upload-container:hover {
+        .image-upload-container:hover,
+        .image-upload-container.active,
+        .image-upload-container.dragover {
             background-color: rgba(74, 111, 165, 0.1);
+            border-color: #375d8a;
         }
         .upload-icon {
-            font-size: 2.5rem;
+            font-size: 2rem;
             color: #4a6fa5;
-            margin-bottom: 1rem;
+            margin-bottom: 0.5rem;
         }
         .image-preview-container {
             display: flex;
@@ -139,11 +142,30 @@
             margin-top: 1rem;
         }
         .image-preview {
+            position: relative;
             width: 100px;
             height: 100px;
             border-radius: 4px;
-            object-fit: cover;
             border: 1px solid #ddd;
+            overflow: hidden;
+        }
+        .image-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .image-preview .remove-image {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background-color: rgba(255, 0, 0, 0.7);
+            color: white;
+            border: none;
+            width: 20px;
+            height: 20px;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
         }
         .button-container {
             text-align: center;
@@ -202,7 +224,8 @@
             <a href="/transcribe" class="nav-button">Transcribe</a>
             <a href="/diff_check" class="nav-button">Assess for Differences</a>
             <a href="/finalise_report" class="nav-button">Report Builder</a>
-            <!-- Authentication links -->
+
+            <!-- Authentication links (these are placeholders, will be replaced by Jinja) -->
             <a href="/profile" class="nav-button">Profile</a>
             <a href="/logout" class="nav-button">Logout</a>
         </div>
@@ -231,7 +254,7 @@
 
             <div class="section">
                 <h2 class="section-title">Room Images</h2>
-                <p>Add images for each room to enhance your report. The images will be included in their respective sections.</p>
+                <p>Add images for each room. The images will be included in their respective sections in the final report.</p>
 
                 <div id="rooms-container">
                     <!-- Room sections will be generated here dynamically -->
@@ -283,7 +306,7 @@
             reportTypeBadge.textContent = reportTypeName;
 
             // Fetch rooms from the uploaded CSV
-            fetch(`/api/get_rooms?csvId=${csvId}`)
+            fetch(`/api/get_csv_rooms?csvId=${csvId}`)
                 .then(response => {
                     if (!response.ok) {
                         throw new Error('Network response was not ok');
@@ -303,7 +326,7 @@
                         `<div class="error-message">Error loading rooms: ${error.message}</div>`;
                 });
 
-            // Function to generate room sections
+            // Function to generate room sections with image upload
             function generateRoomSections(rooms) {
                 const roomsContainer = document.getElementById('rooms-container');
                 roomsContainer.innerHTML = ''; // Clear loading message
@@ -316,12 +339,13 @@
                 rooms.forEach((room, index) => {
                     const roomSection = document.createElement('div');
                     roomSection.className = 'room-section';
+                    roomSection.setAttribute('data-room', room);
                     roomSection.innerHTML = `
                         <h3 class="room-title">
                             ${index + 1}. ${room}
                             <span class="room-count" id="image-count-${index}">0 images</span>
                         </h3>
-                        <div class="room-info">Add images for this room. Recommended: 3-5 images per room.</div>
+                        <div class="room-info">Upload images for this room. Recommended: 3-5 images per room.</div>
                         <div class="image-upload-container" id="upload-room-${index}">
                             <div class="upload-icon">📷</div>
                             <p>Drag & drop images here or click to select files</p>
@@ -359,14 +383,14 @@
                 // Highlight on drag enter/over
                 ['dragenter', 'dragover'].forEach(eventName => {
                     uploadArea.addEventListener(eventName, function() {
-                        uploadArea.style.backgroundColor = 'rgba(74, 111, 165, 0.1)';
+                        this.classList.add('dragover');
                     }, false);
                 });
 
                 // Remove highlight on drag leave/drop
                 ['dragleave', 'drop'].forEach(eventName => {
                     uploadArea.addEventListener(eventName, function() {
-                        uploadArea.style.backgroundColor = 'rgba(74, 111, 165, 0.05)';
+                        this.classList.remove('dragover');
                     }, false);
                 });
 
@@ -382,41 +406,89 @@
                 }, false);
 
                 // Handle file selection via input
-                fileInput.addEventListener('change', function() {
+                fileInput.addEventListener('change', function(e) {
                     handleFiles(this.files);
-                }, false);
+                });
 
+                // Handle the uploaded files
                 function handleFiles(files) {
-                    // For the prototype, just show placeholders without actually uploading
                     if (!files.length) return;
 
-                    // Update image count
-                    imageCount.textContent = `${files.length} image${files.length === 1 ? '' : 's'}`;
+                    // Get existing count of images
+                    const existingImages = previewContainer.querySelectorAll('.image-preview').length;
 
-                    // Clear previous previews
-                    previewContainer.innerHTML = '';
+                    // Update image count with both existing and new images
+                    const totalImages = existingImages + files.length;
+                    imageCount.textContent = `${totalImages} image${totalImages === 1 ? '' : 's'}`;
 
-                    // Create image previews
-                    Array.from(files).forEach(file => {
+                    // Add preview for each new image (don't clear existing ones)
+                    Array.from(files).forEach((file, i) => {
                         if (!file.type.match('image.*')) return;
 
-                        const img = document.createElement('img');
-                        img.classList.add('image-preview');
-                        img.file = file;
-                        previewContainer.appendChild(img);
+                        // Create preview element
+                        const preview = document.createElement('div');
+                        preview.className = 'image-preview';
 
+                        // Create image element
+                        const img = document.createElement('img');
+                        preview.appendChild(img);
+
+                        // Create remove button
+                        const removeBtn = document.createElement('button');
+                        removeBtn.className = 'remove-image';
+                        removeBtn.textContent = '×';
+                        removeBtn.setAttribute('data-file', file.name);
+                        preview.appendChild(removeBtn);
+
+                        // Add preview to container
+                        previewContainer.appendChild(preview);
+
+                        // Read the file and set the image source
                         const reader = new FileReader();
                         reader.onload = (function(aImg) {
-                            return function(e) { aImg.src = e.target.result; };
+                            return function(e) {
+                                aImg.src = e.target.result;
+                            };
                         })(img);
                         reader.readAsDataURL(file);
+
+                        // Handle remove button click
+                        removeBtn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+
+                            // Remove this preview
+                            previewContainer.removeChild(preview);
+
+                            // Update image count
+                            const currentCount = previewContainer.querySelectorAll('.image-preview').length;
+                            imageCount.textContent = `${currentCount} image${currentCount === 1 ? '' : 's'}`;
+                        });
                     });
                 }
+
+                // Function to update the file input
+                function updateFileInput() {
+                    // This is tricky as FileList is read-only
+                    // In a real implementation, you'd need to track these selections separately
+                    // For now, we'll just note that this would need additional handling
+                    console.log("Note: Removing individual files from the input requires custom handling");
+                }
+            }
+
+            // Helper function to prevent defaults
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
             }
 
             // Handle form submission
             document.getElementById('report-form').addEventListener('submit', function(e) {
                 e.preventDefault();
+
+                // Show progress
+                document.getElementById('progress-container').style.display = 'block';
+                document.getElementById('generate-btn').disabled = true;
 
                 // Get form data
                 const formData = new FormData(this);
@@ -424,10 +496,6 @@
                 // Add report type and CSV ID
                 formData.append('reportType', reportType);
                 formData.append('csvId', csvId);
-
-                // Show progress
-                document.getElementById('progress-container').style.display = 'block';
-                document.getElementById('generate-btn').disabled = true;
 
                 // Simulate progress (in a real app, you'd get updates from the server)
                 simulateProgress();
@@ -461,12 +529,7 @@
                 });
             });
 
-            // Helper functions
-            function preventDefaults(e) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-
+            // Helper to simulate progress
             function simulateProgress() {
                 const progressBar = document.getElementById('progress');
                 let width = 0;
@@ -480,6 +543,7 @@
                 }, 300);
             }
 
+            // Helper to handle file download
             function downloadReport(url, filename) {
                 const a = document.createElement('a');
                 a.href = url;
