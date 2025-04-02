@@ -367,6 +367,7 @@
             function setupImageUpload(index, room) {
                 const uploadArea = document.getElementById(`upload-room-${index}`);
                 const fileInput = document.getElementById(`room-images-${index}`);
+                fileInput.setAttribute('multiple', 'multiple');
                 const previewContainer = document.getElementById(`preview-room-${index}`);
                 const imageCount = document.getElementById(`image-count-${index}`);
 
@@ -483,6 +484,7 @@
             }
 
             // Handle form submission
+            // Handle form submission
             document.getElementById('report-form').addEventListener('submit', function(e) {
                 e.preventDefault();
 
@@ -490,14 +492,36 @@
                 document.getElementById('progress-container').style.display = 'block';
                 document.getElementById('generate-btn').disabled = true;
 
-                // Get form data
-                const formData = new FormData(this);
+                // Create a new FormData instance
+                const formData = new FormData();
+
+                // Add form fields
+                formData.append('address', document.getElementById('address').value);
+                formData.append('inspectionDate', document.getElementById('inspection-date').value);
+                formData.append('onBehalfOf', document.getElementById('on-behalf-of').value);
 
                 // Add report type and CSV ID
-                formData.append('reportType', reportType);
-                formData.append('csvId', csvId);
+                const urlParams = new URLSearchParams(window.location.search);
+                formData.append('reportType', urlParams.get('type') || 'full');
+                formData.append('csvId', urlParams.get('csvId') || 'latest');
 
-                // Simulate progress (in a real app, you'd get updates from the server)
+                // Get all room sections
+                const roomSections = document.querySelectorAll('.room-section');
+
+                // Add files for each room
+                roomSections.forEach(section => {
+                    const roomName = section.getAttribute('data-room');
+                    const fileInput = section.querySelector('input[type="file"]');
+
+                    if (fileInput && fileInput.files.length > 0) {
+                        // Add all files from this input
+                        for (let i = 0; i < fileInput.files.length; i++) {
+                            formData.append(`roomImages[${roomName}]`, fileInput.files[i]);
+                        }
+                    }
+                });
+
+                // Simulate progress
                 simulateProgress();
 
                 // Submit form data

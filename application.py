@@ -1847,21 +1847,32 @@ def generate_enhanced_report():
                 })
 
         # Process uploaded images for each room
+        # Update the image processing in the generate_enhanced_report route
+        # Replace the image processing section with this code:
+
+        # Process uploaded images for each room
         room_images = {}
 
-        # Check if any image files were uploaded
-        for key in request.files:
+        # Debug: print all keys in request.files
+        logging.info(f"Form keys: {list(request.form.keys())}")
+        logging.info(f"File keys: {list(request.files.keys())}")
+
+        # Check for image files in the request
+        for key in request.files.keys():
             if key.startswith('roomImages['):
                 # Extract room name from the input name format: roomImages[Room Name]
-                room_name = key[11:-1]  # Extract what's between 'roomImages[' and ']'
+                room_name = key[11:-1].lower()  # Extract what's between 'roomImages[' and ']'
+                logging.info(f"Processing images for room: {room_name}")
+
+                # Initialize room in the dictionary if needed
+                if room_name not in room_images:
+                    room_images[room_name] = []
 
                 # Get all files for this room
                 files = request.files.getlist(key)
+                logging.info(f"Number of files for {room_name}: {len(files)}")
 
-                if not room_name in room_images:
-                    room_images[room_name] = []
-
-                # Save the images temporarily
+                # Save each image file
                 for file in files:
                     if file and file.filename:
                         # Generate a unique filename
@@ -1873,8 +1884,12 @@ def generate_enhanced_report():
                         file.save(img_path)
                         room_images[room_name].append(str(img_path))
 
-                        # Log the image save
-                        logging.info(f"Saved image for room '{room_name}': {img_path}")
+                        # Log the save
+                        logging.info(f"Saved image for {room_name}: {img_path} (from {file.filename})")
+
+        # Debug log the final image count per room
+        for room, images in room_images.items():
+            logging.info(f"Room {room}: {len(images)} images collected")
 
         # Generate the enhanced report
         result_path = generate_enhanced_docx_report(
@@ -2062,6 +2077,9 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
 
         room_data[current_room].append(row)
 
+    # Update the room processing in generate_enhanced_docx_report function
+    # This restructures how we add room content to ensure images come at the end
+
     # Second pass - process each room group
     first_room = True
     room_counter = 1  # Counter for room numbering
@@ -2079,39 +2097,6 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
         numbered_room_heading = f"{room_counter}. {room}"
         room_heading = doc.add_heading(numbered_room_heading, level=1)
         room_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add room images if available
-        if room in room_images and room_images[room]:
-            # Add subheading for images
-            img_heading = doc.add_heading('Room Images', level=2)
-
-            # Simply add each image in sequence with a paragraph break between them
-            for i, img_path in enumerate(room_images[room]):
-                try:
-                    # Create a paragraph for the image
-                    p = doc.add_paragraph()
-                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-                    # Add the image to the paragraph
-                    run = p.add_run()
-                    run.add_picture(img_path, width=Inches(5.0))  # Standard width that fits the page
-
-                    # Add caption
-                    caption = doc.add_paragraph(f"Image {i + 1}")
-                    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    caption.style = 'Caption'
-
-                    # Add some space
-                    doc.add_paragraph()
-
-                except Exception as e:
-                    # If adding the image fails, add a placeholder text
-                    p = doc.add_paragraph(f"[Image {i + 1} could not be displayed]")
-                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    logging.error(f"Error adding image to report: {str(e)}")
-
-                    # Add space even if the image fails
-                    doc.add_paragraph()
 
         # Create a table for this room's inventory items
         # Columns: Attribute, Feature, Comment, Tenant Responsibility (TR)
@@ -2164,6 +2149,63 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
             # Center align the TR column
             if new_row[3].text:
                 new_row[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # NOW add room images AFTER the inventory table - this ensures they appear at the end of the room section
+        # This is the key change from the previous version
+        room_lower = room.lower() if isinstance(room, str) else ""
+        logging.info(f"Looking for images for room: {room_lower}")
+        logging.info(f"Available room keys in room_images: {list(room_images.keys())}")
+
+        if room_lower in room_images and room_images[room_lower]:
+            image_count = len(room_images[room_lower])
+            logging.info(f"Found {image_count} images for room: {room_lower}")
+
+            # Add images heading if we have images
+            if image_count > 0:
+                img_heading = doc.add_heading('Room Images', level=2)
+
+            # Add each image in sequence
+            for i, img_path in enumerate(room_images[room_lower]):
+                logging.info(f"Adding image {i + 1}: {img_path}")
+                try:
+                    # Create a paragraph for the image
+                    p = doc.add_paragraph()
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                    # Verify the image path exists
+                    if not os.path.exists(img_path):
+                        logging.error(f"Image file not found: {img_path}")
+                        p.add_run(f"[Image {i + 1} file not found]")
+                        continue
+
+                    # Log image file details
+                    file_size = os.path.getsize(img_path)
+                    logging.info(f"Image file size: {file_size} bytes")
+
+                    # Add the image to the paragraph
+                    run = p.add_run()
+                    run.add_picture(img_path, width=Inches(5.0))  # Standard width
+
+                    # Add caption
+                    caption = doc.add_paragraph(f"Image {i + 1}")
+                    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    caption.style = 'Caption'
+
+                    # Add some space
+                    doc.add_paragraph()
+
+                    logging.info(f"Successfully added image {i + 1}")
+
+                except Exception as e:
+                    # If adding the image fails, add a placeholder text
+                    error_p = doc.add_paragraph(f"[Image {i + 1} could not be displayed: {str(e)}]")
+                    error_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    logging.error(f"Error adding image to report: {str(e)}", exc_info=True)
+
+                    # Add space even if the image fails
+                    doc.add_paragraph()
+        else:
+            logging.info(f"No images found for room: {room_lower}")
 
         # Increment room counter for the next room
         room_counter += 1
