@@ -1398,7 +1398,8 @@ def generate_diff_html(original_text, comparison_text):
 
 def generate_docx_report(csv_path, report_type='full'):
     """
-    Generate a formatted Word document from CSV data using templates
+    Generate a formatted Word document from CSV data using templates and tables
+    partitioned by room.
 
     Args:
         csv_path: Path to the CSV file
@@ -1411,6 +1412,7 @@ def generate_docx_report(csv_path, report_type='full'):
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
     from datetime import datetime
 
     # Read CSV data
@@ -1423,11 +1425,9 @@ def generate_docx_report(csv_path, report_type='full'):
     doc.core_properties.title = "Property Inspection Report"
     doc.core_properties.author = "PhillyScript"
 
-    # Format document based on report type
+    # Add appropriate headers and boilerplate content based on report type
     if report_type == 'inventory':
         # INVENTORY CHECK-IN REPORT FORMAT
-
-        # Add title
         title = doc.add_heading('INVENTORY', 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -1494,46 +1494,133 @@ def generate_docx_report(csv_path, report_type='full'):
             cells[0].text = num + " " + title
             cells[1].text = desc
 
-        # Add a page break before CSV data section
-        doc.add_page_break()
+    elif report_type == 'full':
+        # FULL CHECK-IN REPORT FORMAT
+        title = doc.add_heading('Full Check-In Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-        # Now add a heading for the property details section where CSV data will go
-        doc.add_heading('Property Details', level=1)
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-        # CSV DATA INSERTION POINT
-        # Process each row in the CSV to add features and comments
-        current_feature = None
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention. Items marked with 'TR' indicate tenant responsibility.")
 
-        for index, row in df.iterrows():
-            feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
-                'Feature'].strip() else None
-            comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
+    elif report_type == 'checkout':
+        # CHECK-OUT REPORT FORMAT
+        title = doc.add_heading('Check-Out Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-            # Check for tenant responsibility
-            is_tenant_responsibility = False
-            if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
-                is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-            # If this is a new feature, add a subheading
-            if feature and feature != " ":
-                current_feature = feature
-                doc.add_heading(feature, level=2)
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report. Items marked with 'TR' indicate tenant responsibility.")
 
-            # Add the comment as a paragraph
-            if comment:
-                p = doc.add_paragraph()
-                p.style = 'List Bullet'
-                comment_run = p.add_run(comment)
+    # Add a page break before starting the room-based sections
+    doc.add_page_break()
 
-                # If tenant responsibility, add indicator and style
-                if is_tenant_responsibility:
-                    tr_run = p.add_run(" [TR]")
-                    tr_run.bold = True
-                    tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
+    # Group the data by room - using a simple approach to handle empty room cells
+    room_data = {}
+    current_room = None
 
-        # Add a page break before declaration section
-        doc.add_page_break()
+    # First pass - group rows by room
+    for _, row in df.iterrows():
+        room = row['Room'].strip() if pd.notna(row['Room']) and row['Room'].strip() else None
 
+        if room:
+            current_room = room
+
+        if current_room not in room_data:
+            room_data[current_room] = []
+
+        room_data[current_room].append(row)
+
+    # Second pass - process each room group
+    first_room = True
+    room_counter = 1  # Counter for room numbering
+
+    for room, rows in room_data.items():
+        if room is None:
+            continue  # Skip rows with no room (should be rare/nonexistent)
+
+        # Add a page break except for the first room
+        if not first_room:
+            doc.add_page_break()
+        first_room = False
+
+        # Add room heading with number
+        numbered_room_heading = f"{room_counter}. {room}"
+        room_heading = doc.add_heading(numbered_room_heading, level=1)
+        room_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Create a table for this room
+        # Columns: Attribute, Feature, Comment, Tenant Responsibility (TR)
+        table = doc.add_table(rows=1, cols=4)
+        table.style = 'Table Grid'
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+        # Set the header row
+        header_cells = table.rows[0].cells
+        header_cells[0].text = 'Attribute'
+        header_cells[1].text = 'Feature'
+        header_cells[2].text = 'Comment'
+        header_cells[3].text = 'Tenant Responsibility (TR)'
+
+        # Apply header formatting
+        for cell in header_cells:
+            cell_para = cell.paragraphs[0]
+            cell_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in cell_para.runs:
+                run.bold = True
+
+        # Add the data rows for this room
+        # Track attributes to add numbering
+        attribute_counter = 1
+        current_attribute = None
+
+        for row_data in rows:
+            # Get attribute value
+            attribute = row_data['Attribute'] if pd.notna(row_data['Attribute']) else ''
+
+            # Update attribute numbering if this is a new attribute
+            if attribute and attribute != current_attribute:
+                current_attribute = attribute
+                numbered_attribute = f"{room_counter}.{attribute_counter} {attribute}"
+                attribute_counter += 1
+            else:
+                # Empty string if this row doesn't have an attribute (continuing from previous)
+                numbered_attribute = ''
+
+            # Add a new row to the table
+            new_row = table.add_row().cells
+
+            # Fill in the cells
+            new_row[0].text = numbered_attribute
+            new_row[1].text = row_data['Feature'] if pd.notna(row_data['Feature']) else ''
+            new_row[2].text = row_data['Comment'] if pd.notna(row_data['Comment']) else ''
+            new_row[3].text = row_data['Tenant Responsibility (TR)'] if pd.notna(
+                row_data['Tenant Responsibility (TR)']) else ''
+
+            # Center align the TR column
+            if new_row[3].text:
+                new_row[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Increment room counter for the next room
+        room_counter += 1
+
+    # Add a page break before closing sections
+    doc.add_page_break()
+
+    # Add closing content based on report type
+    if report_type == 'inventory':
         # Add tenant and landlord declaration section
         doc.add_heading('TENANT DECLARATION', level=1)
         doc.add_paragraph(
@@ -1555,109 +1642,15 @@ def generate_docx_report(csv_path, report_type='full'):
         doc.add_paragraph("Name ……………………………………………………………………")
         doc.add_paragraph("Signed for the Landlord …………………………………………………")
 
-    elif report_type == 'full':
-        # FULL CHECK-IN REPORT FORMAT
-        title = doc.add_heading('Full Check-In Report', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add date
-        date_paragraph = doc.add_paragraph()
-        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
-        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add introduction
-        doc.add_heading('Introduction', level=1)
-        doc.add_paragraph(
-            "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention. Items marked with 'TR' indicate tenant responsibility.")
-
-        # Add CSV data
-        doc.add_heading('Inspection Details', level=1)
-
-        # Process each row in the CSV
-        current_feature = None
-        for index, row in df.iterrows():
-            feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
-                'Feature'].strip() else None
-            comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
-
-            # Check for tenant responsibility
-            is_tenant_responsibility = False
-            if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
-                is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
-
-            # If this is a new feature, add a subheading
-            if feature and feature != " ":
-                current_feature = feature
-                doc.add_heading(feature, level=2)
-
-            # Add the comment as a paragraph
-            if comment:
-                p = doc.add_paragraph()
-                p.style = 'List Bullet'
-                comment_run = p.add_run(comment)
-
-                # If tenant responsibility, add indicator and style
-                if is_tenant_responsibility:
-                    tr_run = p.add_run(" [TR]")
-                    tr_run.bold = True
-                    tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
-
+    elif report_type == 'full' or report_type == 'checkout':
         # Add summary
         doc.add_heading('Summary', level=1)
-        doc.add_paragraph(
-            "This full check-in report provides a comprehensive overview of the property's condition at the beginning of the tenancy. Please address any issues identified in this report promptly.")
-
-    elif report_type == 'checkout':
-        # CHECK-OUT REPORT FORMAT
-        title = doc.add_heading('Check-Out Report', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add date
-        date_paragraph = doc.add_paragraph()
-        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
-        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add introduction
-        doc.add_heading('Introduction', level=1)
-        doc.add_paragraph(
-            "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report. Items marked with 'TR' indicate tenant responsibility.")
-
-        # Add CSV data
-        doc.add_heading('Inspection Details', level=1)
-
-        # Process each row in the CSV
-        current_feature = None
-        for index, row in df.iterrows():
-            feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
-                'Feature'].strip() else None
-            comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
-
-            # Check for tenant responsibility
-            is_tenant_responsibility = False
-            if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
-                is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
-
-            # If this is a new feature, add a subheading
-            if feature and feature != " ":
-                current_feature = feature
-                doc.add_heading(feature, level=2)
-
-            # Add the comment as a paragraph
-            if comment:
-                p = doc.add_paragraph()
-                p.style = 'List Bullet'
-                comment_run = p.add_run(comment)
-
-                # If tenant responsibility, add indicator and style
-                if is_tenant_responsibility:
-                    tr_run = p.add_run(" [TR]")
-                    tr_run.bold = True
-                    tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
-
-        # Add summary
-        doc.add_heading('Summary', level=1)
-        doc.add_paragraph(
-            "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy. Any discrepancies with the check-in report have been noted.")
+        if report_type == 'full':
+            doc.add_paragraph(
+                "This full check-in report provides a comprehensive overview of the property's condition at the beginning of the tenancy. Please address any issues identified in this report promptly.")
+        else:  # checkout
+            doc.add_paragraph(
+                "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy. Any discrepancies with the check-in report have been noted.")
 
     # Save the document with report type in the filename
     result_id = str(uuid.uuid4())
