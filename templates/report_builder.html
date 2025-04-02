@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PhillyScript - Enhanced Report Builder</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        header {
+            background-color: #4a6fa5;
+            color: white;
+            padding: 0 1rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .title {
+            margin: 0;
+            font-size: 1.5rem;
+            font-weight: 500;
+            padding: 1rem 0;
+        }
+        .nav-bar {
+            display: flex;
+            gap: 1rem;
+        }
+        .nav-button {
+            padding: 0.5rem 1rem;
+            background-color: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+            text-decoration: none;
+            transition: background-color 0.3s ease;
+        }
+        .nav-button:hover {
+            background-color: rgba(255, 255, 255, 0.3);
+        }
+        .container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+        .page-title {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .report-type-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background-color: #4a6fa5;
+            color: white;
+            border-radius: 4px;
+            font-weight: 500;
+            margin-bottom: 1.5rem;
+        }
+        .section {
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        .section-title {
+            font-size: 1.3rem;
+            margin-top: 0;
+            margin-bottom: 1.5rem;
+            color: #4a6fa5;
+            border-bottom: 1px solid #e0e0e0;
+            padding-bottom: 0.5rem;
+        }
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        .form-input {
+            width: 100%;
+            padding: 0.8rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 1rem;
+            box-sizing: border-box;
+        }
+        .form-input:focus {
+            border-color: #4a6fa5;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(74, 111, 165, 0.2);
+        }
+        .room-section {
+            background-color: #f9f9f9;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .room-title {
+            font-size: 1.2rem;
+            margin-top: 0;
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .room-info {
+            color: #666;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+        .image-upload-container {
+            border: 2px dashed #4a6fa5;
+            border-radius: 8px;
+            padding: 2rem;
+            text-align: center;
+            background-color: rgba(74, 111, 165, 0.05);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        .image-upload-container:hover {
+            background-color: rgba(74, 111, 165, 0.1);
+        }
+        .upload-icon {
+            font-size: 2.5rem;
+            color: #4a6fa5;
+            margin-bottom: 1rem;
+        }
+        .image-preview-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .image-preview {
+            width: 100px;
+            height: 100px;
+            border-radius: 4px;
+            object-fit: cover;
+            border: 1px solid #ddd;
+        }
+        .button-container {
+            text-align: center;
+            margin-top: 2rem;
+        }
+        .action-btn {
+            background-color: #4a6fa5;
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 6px;
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        .action-btn:hover {
+            background-color: #375d8a;
+        }
+        .action-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .file-input {
+            display: none;
+        }
+        .room-count {
+            color: #666;
+            font-size: 0.9rem;
+            font-weight: normal;
+        }
+        .progress-container {
+            display: none;
+            margin-top: 2rem;
+            text-align: center;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 1rem;
+        }
+        .progress {
+            height: 100%;
+            background-color: #4a6fa5;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1 class="title"><a href="/" style="color: white; text-decoration: none;">PhillyScript</a></h1>
+        <div class="nav-bar">
+            <a href="/transcribe" class="nav-button">Transcribe</a>
+            <a href="/diff_check" class="nav-button">Assess for Differences</a>
+            <a href="/finalise_report" class="nav-button">Report Builder</a>
+            <!-- Authentication links -->
+            <a href="/profile" class="nav-button">Profile</a>
+            <a href="/logout" class="nav-button">Logout</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <h1 class="page-title">Enhanced Report Builder</h1>
+        <div class="report-type-badge" id="report-type">Loading Report Type...</div>
+
+        <form id="report-form">
+            <div class="section">
+                <h2 class="section-title">Property Details</h2>
+                <div class="form-group">
+                    <label for="address" class="form-label">Property Address *</label>
+                    <input type="text" id="address" name="address" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="inspection-date" class="form-label">Date of Inspection *</label>
+                    <input type="date" id="inspection-date" name="inspectionDate" class="form-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="on-behalf-of" class="form-label">On Behalf Of *</label>
+                    <input type="text" id="on-behalf-of" name="onBehalfOf" class="form-input" required>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2 class="section-title">Room Images</h2>
+                <p>Add images for each room to enhance your report. The images will be included in their respective sections.</p>
+
+                <div id="rooms-container">
+                    <!-- Room sections will be generated here dynamically -->
+                    <div class="loading-message">Loading rooms from CSV data...</div>
+                </div>
+            </div>
+
+            <div class="button-container">
+                <button type="submit" id="generate-btn" class="action-btn">Generate Final Report</button>
+            </div>
+
+            <div id="progress-container" class="progress-container">
+                <h3>Generating Your Report...</h3>
+                <p id="progress-message">Processing data and images...</p>
+                <div class="progress-bar">
+                    <div id="progress" class="progress"></div>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Get report type and CSV ID from URL parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            const reportType = urlParams.get('type');
+            const csvId = urlParams.get('csvId');
+
+            if (!reportType || !csvId) {
+                alert('Missing required parameters. Please return to the previous page and try again.');
+                window.location.href = '/finalise_report';
+                return;
+            }
+
+            // Set report type badge
+            const reportTypeBadge = document.getElementById('report-type');
+            let reportTypeName = 'Report';
+            switch(reportType) {
+                case 'inventory':
+                    reportTypeName = 'Inventory Check-In Report';
+                    break;
+                case 'full':
+                    reportTypeName = 'Full Check-In Report';
+                    break;
+                case 'checkout':
+                    reportTypeName = 'Check-Out Report';
+                    break;
+            }
+            reportTypeBadge.textContent = reportTypeName;
+
+            // Fetch rooms from the uploaded CSV
+            fetch(`/api/get_rooms?csvId=${csvId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        generateRoomSections(data.rooms);
+                    } else {
+                        throw new Error(data.message || 'Failed to load rooms');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('rooms-container').innerHTML =
+                        `<div class="error-message">Error loading rooms: ${error.message}</div>`;
+                });
+
+            // Function to generate room sections
+            function generateRoomSections(rooms) {
+                const roomsContainer = document.getElementById('rooms-container');
+                roomsContainer.innerHTML = ''; // Clear loading message
+
+                if (rooms.length === 0) {
+                    roomsContainer.innerHTML = '<p>No rooms found in the CSV data.</p>';
+                    return;
+                }
+
+                rooms.forEach((room, index) => {
+                    const roomSection = document.createElement('div');
+                    roomSection.className = 'room-section';
+                    roomSection.innerHTML = `
+                        <h3 class="room-title">
+                            ${index + 1}. ${room}
+                            <span class="room-count" id="image-count-${index}">0 images</span>
+                        </h3>
+                        <div class="room-info">Add images for this room. Recommended: 3-5 images per room.</div>
+                        <div class="image-upload-container" id="upload-room-${index}">
+                            <div class="upload-icon">📷</div>
+                            <p>Drag & drop images here or click to select files</p>
+                            <input type="file" id="room-images-${index}" name="roomImages[${room}]"
+                                class="file-input" multiple accept="image/*">
+                        </div>
+                        <div class="image-preview-container" id="preview-room-${index}">
+                            <!-- Image previews will be added here -->
+                        </div>
+                    `;
+                    roomsContainer.appendChild(roomSection);
+
+                    // Set up file upload for this room
+                    setupImageUpload(index, room);
+                });
+            }
+
+            // Function to set up image upload for a room
+            function setupImageUpload(index, room) {
+                const uploadArea = document.getElementById(`upload-room-${index}`);
+                const fileInput = document.getElementById(`room-images-${index}`);
+                const previewContainer = document.getElementById(`preview-room-${index}`);
+                const imageCount = document.getElementById(`image-count-${index}`);
+
+                if (!uploadArea || !fileInput || !previewContainer || !imageCount) {
+                    console.error(`Elements not found for room: ${room}`);
+                    return;
+                }
+
+                // Prevent default behaviors
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, preventDefaults, false);
+                });
+
+                // Highlight on drag enter/over
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, function() {
+                        uploadArea.style.backgroundColor = 'rgba(74, 111, 165, 0.1)';
+                    }, false);
+                });
+
+                // Remove highlight on drag leave/drop
+                ['dragleave', 'drop'].forEach(eventName => {
+                    uploadArea.addEventListener(eventName, function() {
+                        uploadArea.style.backgroundColor = 'rgba(74, 111, 165, 0.05)';
+                    }, false);
+                });
+
+                // Handle drop
+                uploadArea.addEventListener('drop', function(e) {
+                    const dt = e.dataTransfer;
+                    handleFiles(dt.files);
+                }, false);
+
+                // Handle click to select
+                uploadArea.addEventListener('click', function() {
+                    fileInput.click();
+                }, false);
+
+                // Handle file selection via input
+                fileInput.addEventListener('change', function() {
+                    handleFiles(this.files);
+                }, false);
+
+                function handleFiles(files) {
+                    // For the prototype, just show placeholders without actually uploading
+                    if (!files.length) return;
+
+                    // Update image count
+                    imageCount.textContent = `${files.length} image${files.length === 1 ? '' : 's'}`;
+
+                    // Clear previous previews
+                    previewContainer.innerHTML = '';
+
+                    // Create image previews
+                    Array.from(files).forEach(file => {
+                        if (!file.type.match('image.*')) return;
+
+                        const img = document.createElement('img');
+                        img.classList.add('image-preview');
+                        img.file = file;
+                        previewContainer.appendChild(img);
+
+                        const reader = new FileReader();
+                        reader.onload = (function(aImg) {
+                            return function(e) { aImg.src = e.target.result; };
+                        })(img);
+                        reader.readAsDataURL(file);
+                    });
+                }
+            }
+
+            // Handle form submission
+            document.getElementById('report-form').addEventListener('submit', function(e) {
+                e.preventDefault();
+
+                // Get form data
+                const formData = new FormData(this);
+
+                // Add report type and CSV ID
+                formData.append('reportType', reportType);
+                formData.append('csvId', csvId);
+
+                // Show progress
+                document.getElementById('progress-container').style.display = 'block';
+                document.getElementById('generate-btn').disabled = true;
+
+                // Simulate progress (in a real app, you'd get updates from the server)
+                simulateProgress();
+
+                // Submit form data
+                fetch('/api/generate_enhanced_report', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.status === 'success') {
+                        // Download the generated report
+                        downloadReport(data.reportUrl, data.reportName);
+                    } else {
+                        alert(`Error: ${data.message}`);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert(`An error occurred: ${error.message}`);
+                })
+                .finally(() => {
+                    document.getElementById('progress-container').style.display = 'none';
+                    document.getElementById('generate-btn').disabled = false;
+                });
+            });
+
+            // Helper functions
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+
+            function simulateProgress() {
+                const progressBar = document.getElementById('progress');
+                let width = 0;
+                const interval = setInterval(function() {
+                    if (width >= 90) {
+                        clearInterval(interval);
+                    } else {
+                        width += 5;
+                        progressBar.style.width = width + '%';
+                    }
+                }, 300);
+            }
+
+            function downloadReport(url, filename) {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename || '';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+
+                // Redirect back to reports page after successful download
+                setTimeout(() => {
+                    window.location.href = '/finalise_report?success=true';
+                }, 1000);
+            }
+        });
+    </script>
+</body>
+</html>

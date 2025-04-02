@@ -590,24 +590,24 @@
             // Add event listeners for each button
             if (generateInventoryBtn) {
                 generateInventoryBtn.addEventListener('click', function() {
-                    generateReport('inventory');
+                    prepareReport('inventory');
                 });
             }
 
             if (generateFullBtn) {
                 generateFullBtn.addEventListener('click', function() {
-                    generateReport('full');
+                    prepareReport('full');
                 });
             }
 
             if (generateCheckoutBtn) {
                 generateCheckoutBtn.addEventListener('click', function() {
-                    generateReport('checkout');
+                    prepareReport('checkout');
                 });
             }
 
-            // Function to handle report generation
-            function generateReport(reportType) {
+            // Function to prepare for report generation (new intermediate step)
+            function prepareReport(reportType) {
                 if (!files.csv && !files.useLatest) {
                     showStatus('generate', 'error', 'Missing File', 'Please upload a CSV file or choose to use the latest one.');
                     return;
@@ -625,23 +625,15 @@
                 // Add report type to the form data
                 formData.append('reportType', reportType);
 
-                // Show processing status based on report type
-                let processingMessage = 'Generating the report. This may take a moment...';
-                if (reportType === 'inventory') {
-                    processingMessage = 'Generating Inventory Check-In report...';
-                } else if (reportType === 'full') {
-                    processingMessage = 'Generating Full Check-In report...';
-                } else if (reportType === 'checkout') {
-                    processingMessage = 'Generating Check-Out report...';
-                }
-
+                // Show processing status
+                let processingMessage = 'Preparing for report generation...';
                 showStatus('generate', 'info', 'Processing', processingMessage);
                 document.getElementById('generate-progress-bar').classList.add('active');
 
                 // Simulate progress
                 simulateProgress('generate-progress', function() {
-                    // Submit to server
-                    fetch('/generate_report', {
+                    // Submit to server to prepare the report
+                    fetch('/api/prepare_report', {
                         method: 'POST',
                         body: formData
                     })
@@ -653,15 +645,15 @@
                     })
                     .then(data => {
                         if (data.status === 'success') {
-                            // Download the result
-                            openOrDownloadResult(data.resultUrl, `${getReportTypeName(reportType)} report generated successfully`);
+                            // Redirect to the enhanced report builder page
+                            window.location.href = data.redirectUrl;
                         } else {
                             showStatus('generate', 'error', 'Processing Failed', data.message);
                         }
                     })
                     .catch(error => {
                         console.error('Error:', error);
-                        showStatus('generate', 'error', 'Error', 'An error occurred during report generation: ' + error.message);
+                        showStatus('generate', 'error', 'Error', 'An error occurred during preparation: ' + error.message);
                     })
                     .finally(() => {
                         document.getElementById('generate-progress-bar').classList.remove('active');

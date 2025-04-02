@@ -1221,6 +1221,257 @@ def generate_report():
         })
 
 
+def generate_report_boilerplate(doc, report_type, address, inspection_date, on_behalf_of):
+    """
+    Generate standardized boilerplate content for different report types.
+
+    Args:
+        doc: The Document object to add content to
+        report_type: Type of report ('inventory', 'full', or 'checkout')
+        address: Property address
+        inspection_date: Date of inspection (formatted string)
+        on_behalf_of: Preparer name
+    """
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    # Add logo (placeholder)
+    # In a real implementation, you would add a company logo here
+    logo_paragraph = doc.add_paragraph()
+    logo_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    logo_run = logo_paragraph.add_run("Ft² Inventories")
+    logo_run.bold = True
+    logo_run.font.size = Pt(16)
+
+    # Add address on the right side
+    address_paragraph = doc.add_paragraph()
+    address_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    address_run = address_paragraph.add_run(address)
+
+    # Add main report titles based on report type
+    if report_type == 'inventory':
+        # INVENTORY CHECK-IN REPORT FORMAT
+        title = doc.add_heading('INVENTORY', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add And
+        and_heading = doc.add_heading('And', 0)
+        and_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add CHECK IN
+        checkin_heading = doc.add_heading('CHECK IN', 0)
+        checkin_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add subtitle
+        subtitle = doc.add_paragraph('Of the contents and conditions for')
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add property address in a box
+        address_box_para = doc.add_paragraph()
+        address_box_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        address_box = address_box_para.add_run(address)
+
+        # Add date of inspection
+        date_para = doc.add_paragraph(f"Date of inspection: {inspection_date}")
+        date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add prepared by
+        prepared_para = doc.add_paragraph(f"PREPARED BY: Ft² Inventories Ltd")
+        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add company address
+        company_address = doc.add_paragraph("Birch Tree House, Glympton Road, Wootton, Woodstock, OX20 1EJ")
+        company_address.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add company contact
+        company_contact = doc.add_paragraph("info@ft2inventories.co.uk  020 8004 3324")
+        company_contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add on behalf of section
+        behalf_para = doc.add_paragraph("On behalf of:")
+        behalf_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+        # Add name in a table
+        behalf_table = doc.add_table(rows=1, cols=2)
+        behalf_table.autofit = False
+        behalf_table.columns[0].width = Inches(1)
+        behalf_table.columns[1].width = Inches(5)
+        behalf_cells = behalf_table.rows[0].cells
+        behalf_cells[0].text = "Name"
+        behalf_cells[1].text = on_behalf_of
+
+        # Add important information heading
+        info_heading = doc.add_heading('Important Information', level=1)
+        info_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+        # Add important information text
+        info_text = doc.add_paragraph(
+            "The Tenant /Tenant's representative and landlord should sign this document to signify that they have read and understood each page and accept that this Inventory and Check in is a true and accurate representation at the date so specified of the Property at the address stated above. Amendments to this document may be made within 5 days from the date the report is sent out. If no amendments are made within this time the parties will be deemed to accept the document as an accurate representation at the date so specified of the property at the address so stated above without the need for signature. This document should be returned, signed and dated no later than 5 days from the date the report is sent out.")
+
+        # Add table of contents heading
+        toc_heading = doc.add_heading('Table of Contents', level=1)
+
+        # Add placeholder table of contents
+        toc = doc.add_table(rows=6, cols=2)
+        toc.style = 'Table Grid'
+
+        # Add table of contents rows
+        toc_rows = [
+            ("Contents", "Page number"),
+            ("Disclaimer and important information", "[tc1]"),
+            ("General description of conditions/ Utility readings", "[tc2]"),
+            ("Front Door and Entrance Hall", "[tc3]"),
+            ("Bedroom", "[tc4]"),
+            ("Bathroom", "[tc5]")
+        ]
+
+        for i, (content, page) in enumerate(toc_rows):
+            cells = toc.rows[i].cells
+            cells[0].text = content
+            cells[1].text = page
+
+        # Add a page break before disclaimer section
+        doc.add_page_break()
+
+        # Add INVENTORY DISCLAIMERS heading
+        disclaimer_heading = doc.add_heading('INVENTORY DISCLAIMERS', level=1)
+        disclaimer_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add disclaimer table
+        disclaimer_table = doc.add_table(rows=10, cols=2)
+        disclaimer_table.style = 'Table Grid'
+
+        # Add disclaimer content (just a few examples)
+        disclaimer_rows = [
+            ("1.", "Structural", "This Inventory does not constitute a structural survey of the Property."),
+            ("2.", "General",
+             "This Inventory has been prepared on the accepted principle that all items are free from any obvious damage, fault or soiling except where stated. The term 'good' is noted as a guideline for this. NOTE: Should there be any cleaning, health and safety or other issues that need urgent attention, please call the Agent's office immediately."),
+            ("3.", "Description",
+             "Where the words 'gold', 'brass', 'oak', 'walnut' etc are used, it is understood that this is a description of the colour and type of the item and not the actual fabric, unless documentary evidence is available."),
+            ("4.", "Attendees",
+             "The Clerk must be alone in the property for the inventory inspection. The tenant / Landlord or a representative is welcome to briefly attend the inspection should they wish to do so."),
+            ("5.", "Fire Safety Equipment",
+             "If smoke detectors/carbon monoxide monitors are present and replacement batteries are required between maintenance visits or periodic tenancy checks, it is the Tenant's responsibility to replace and frequently check the working order of the same.")
+        ]
+
+        for i, (num, title, desc) in enumerate(disclaimer_rows[:5]):
+            cells = disclaimer_table.rows[i].cells
+            cells[0].text = title
+            cells[1].text = desc
+
+    elif report_type == 'full':
+        # FULL CHECK-IN REPORT FORMAT
+        title = doc.add_heading('Full Check-In Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add property address
+        address_para = doc.add_paragraph(address)
+        address_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Inspection Date: {inspection_date}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add prepared by
+        prepared_para = doc.add_paragraph(f"Prepared by: {on_behalf_of}")
+        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention. Items marked with 'TR' indicate tenant responsibility.")
+
+    elif report_type == 'checkout':
+        # CHECK-OUT REPORT FORMAT
+        title = doc.add_heading('Check-Out Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add property address
+        address_para = doc.add_paragraph(address)
+        address_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Inspection Date: {inspection_date}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add prepared by
+        prepared_para = doc.add_paragraph(f"Prepared by: {on_behalf_of}")
+        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report. Items marked with 'TR' indicate tenant responsibility.")
+
+    # Add page break after boilerplate
+    doc.add_page_break()
+
+    # Add footer with date to every page
+    # Note: This would require more complex handling with python-docx
+    # For now, we'll just add a placeholder at the bottom of each page
+    footer_para = doc.add_paragraph(f"Date of inspection: {inspection_date}")
+    footer_para.style = 'Footer'
+
+
+def generate_report_closing(doc, report_type, page_count):
+    """
+    Generate standardized closing content for different report types.
+
+    Args:
+        doc: The Document object to add content to
+        report_type: Type of report ('inventory', 'full', or 'checkout')
+        page_count: Total number of pages in the document (for declaration)
+    """
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    # Add a page break before closing sections
+    doc.add_page_break()
+
+    # Add closing content based on report type
+    if report_type in ['inventory', 'full']:
+        # Add tenant and landlord declaration section
+        doc.add_heading('TENANT DECLARATION', level=1)
+        doc.add_paragraph(
+            f"The items listed in all [x-pages] of this inventory/check in have been inspected and found to be in the condition indicated.")
+        doc.add_paragraph(
+            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
+
+        # Add signature fields
+        doc.add_paragraph("Name …………………………………………………………")
+        doc.add_paragraph("Signed for the Tenant ……………………………………………")
+
+        doc.add_heading('LANDLORD DECLARATION', level=1)
+        doc.add_paragraph(
+            f"The items listed in all 124 pages of this inventory/check in have been inspected and found to be in the condition indicated.")
+        doc.add_paragraph(
+            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
+
+        # Add signature fields
+        doc.add_paragraph("Name ……………………………………………………………")
+        doc.add_paragraph("Signed for the Landlord …………………………………………")
+
+    elif report_type == 'checkout':
+        # Add summary
+        doc.add_heading('Summary', level=1)
+        doc.add_paragraph(
+            "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy. Any discrepancies with the check-in report have been noted.")
+
+        # Add signatures for checkout
+        doc.add_heading('CHECKOUT CONFIRMATION', level=1)
+        doc.add_paragraph(
+            "This checkout report has been completed and represents the condition of the property at the end of the tenancy.")
+
+        # Add signature fields
+        doc.add_paragraph("Tenant Name: …………………………………………………………")
+        doc.add_paragraph("Tenant Signature: ……………………………………………")
+        doc.add_paragraph("Date: ……………………………………")
+
+        doc.add_paragraph("Agent/Landlord Name: …………………………………………………………")
+        doc.add_paragraph("Agent/Landlord Signature: ……………………………………………")
+        doc.add_paragraph("Date: ……………………………………")
+
 @application.route('/download_report/<filename>')
 def download_report(filename):
     """Serve the generated report for download"""
@@ -1396,14 +1647,263 @@ def generate_diff_html(original_text, comparison_text):
     return styled_html
 
 
-def generate_docx_report(csv_path, report_type='full'):
+# Add these routes to your application.py file
+
+@application.route('/report_builder')
+@login_required
+def enhanced_report_builder():
+    """Render the enhanced report builder page"""
+    return render_template('report_builder.html')
+
+
+@application.route('/api/get_rooms')
+@login_required
+def get_rooms():
+    """API endpoint to get rooms from a CSV file"""
+    csv_id = request.args.get('csvId')
+
+    if not csv_id:
+        return jsonify({
+            'status': 'error',
+            'message': 'Missing csvId parameter'
+        })
+
+    # Find the CSV file
+    csv_path = None
+    if csv_id == 'latest':
+        # Find the most recent CSV file
+        transcript_dir = Path('/tmp/temp_transcripts')
+        if not transcript_dir.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'No transcript directory found'
+            })
+
+        csv_files = list(transcript_dir.glob('*.csv'))
+        if not csv_files:
+            return jsonify({
+                'status': 'error',
+                'message': 'No CSV files found'
+            })
+
+        # Sort by modification time, newest first
+        csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        csv_path = csv_files[0]
+    else:
+        # Find the specific CSV file
+        csv_path = UPLOAD_FOLDER / f"{csv_id}.csv"
+        if not csv_path.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'CSV file not found'
+            })
+
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_path)
+
+        # Extract unique room names (non-empty ones)
+        rooms = []
+        current_room = None
+
+        for _, row in df.iterrows():
+            room = row['Room'].strip() if pd.notna(row['Room']) and row['Room'].strip() else None
+            if room:
+                current_room = room
+                if current_room not in rooms:
+                    rooms.append(current_room)
+
+        return jsonify({
+            'status': 'success',
+            'rooms': rooms
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing CSV: {str(e)}'
+        })
+
+
+@application.route('/api/prepare_report', methods=['POST'])
+@login_required
+def prepare_report():
+    """API endpoint to prepare a report and get the intermediate page"""
+    report_type = request.form.get('reportType', 'full')
+    use_latest = request.form.get('useLatest') == 'true'
+
+    try:
+        csv_path = None
+        csv_id = None
+
+        if use_latest:
+            # Find the most recent CSV file
+            transcript_dir = Path('/tmp/temp_transcripts')
+            if not transcript_dir.exists():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No transcript directory found'
+                })
+
+            csv_files = list(transcript_dir.glob('*.csv'))
+            if not csv_files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV files found'
+                })
+
+            # Sort by modification time, newest first
+            csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            csv_path = csv_files[0]
+            csv_id = 'latest'
+        else:
+            if 'csv' not in request.files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV file provided'
+                })
+
+            csv_file = request.files['csv']
+            if csv_file.filename == '':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No file selected'
+                })
+
+            # Generate a unique ID for this CSV
+            csv_id = str(uuid.uuid4())
+
+            # Save uploaded file
+            csv_path = UPLOAD_FOLDER / f"{csv_id}.csv"
+            csv_file.save(csv_path)
+
+        # Redirect to the report builder with the CSV ID and report type
+        # Fixed URL to match your route name
+        return jsonify({
+            'status': 'success',
+            'redirectUrl': f'/report_builder?csvId={csv_id}&type={report_type}',
+            'message': 'CSV processed successfully'
+        })
+
+    except Exception as e:
+        # Clean up temporary file if it exists and was uploaded
+        if csv_path and not use_latest and csv_path.exists():
+            csv_path.unlink(missing_ok=True)
+
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing CSV: {str(e)}'
+        })
+
+
+@application.route('/api/generate_enhanced_report', methods=['POST'])
+@login_required
+def generate_enhanced_report():
+    """API endpoint to generate a final report with property details and room images"""
+    try:
+        # Get form data
+        report_type = request.form.get('reportType', 'full')
+        csv_id = request.form.get('csvId')
+        address = request.form.get('address')
+        inspection_date = request.form.get('inspectionDate')
+        on_behalf_of = request.form.get('onBehalfOf')
+
+        if not csv_id or not address or not inspection_date or not on_behalf_of:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields'
+            })
+
+        # Find the CSV file
+        csv_path = None
+        if csv_id == 'latest':
+            # Find the most recent CSV file
+            transcript_dir = Path('/tmp/temp_transcripts')
+            if not transcript_dir.exists():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No transcript directory found'
+                })
+
+            csv_files = list(transcript_dir.glob('*.csv'))
+            if not csv_files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV files found'
+                })
+
+            # Sort by modification time, newest first
+            csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            csv_path = csv_files[0]
+        else:
+            # Find the specific CSV file
+            csv_path = UPLOAD_FOLDER / f"{csv_id}.csv"
+            if not csv_path.exists():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'CSV file not found'
+                })
+
+        # Process uploaded images for each room
+        room_images = {}
+        for key in request.files:
+            if key.startswith('roomImages['):
+                # Extract room name from the input name format: roomImages[Room Name]
+                room_name = key[11:-1]  # Extract what's between 'roomImages[' and ']'
+
+                # Save the images temporarily
+                files = request.files.getlist(key)
+                room_images[room_name] = []
+
+                for file in files:
+                    if file.filename:
+                        # Generate a unique filename
+                        img_id = str(uuid.uuid4())
+                        img_ext = Path(secure_filename(file.filename)).suffix
+                        img_path = UPLOAD_FOLDER / f"{img_id}{img_ext}"
+
+                        # Save the image
+                        file.save(img_path)
+                        room_images[room_name].append(str(img_path))
+
+        # Generate the enhanced report
+        result_path = generate_enhanced_docx_report(
+            csv_path,
+            report_type,
+            address,
+            inspection_date,
+            on_behalf_of,
+            room_images
+        )
+
+        # Create a filename based on address and date
+        formatted_date = datetime.strptime(inspection_date, '%Y-%m-%d').strftime('%d-%m-%Y')
+        report_name = f"{address.replace(' ', '_')}_{formatted_date}_{report_type}_report.docx"
+
+        return jsonify({
+            'status': 'success',
+            'reportUrl': f"/download_report/{result_path.name}",
+            'reportName': report_name,
+            'message': f'{report_type.capitalize()} report generated successfully'
+        })
+
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error generating report: {str(e)}'
+        })
+
+
+def generate_enhanced_docx_report(csv_path, report_type, address, inspection_date, on_behalf_of, room_images):
     """
-    Generate a formatted Word document from CSV data using templates and tables
-    partitioned by room.
+    Generate an enhanced report with property details and room images
 
     Args:
         csv_path: Path to the CSV file
         report_type: Type of report to generate ('inventory', 'full', or 'checkout')
+        address: Property address
+        inspection_date: Date of inspection
+        on_behalf_of: Prepared on behalf of
+        room_images: Dictionary mapping room names to lists of image paths
 
     Returns:
         Path to the generated report
@@ -1425,107 +1925,23 @@ def generate_docx_report(csv_path, report_type='full'):
     doc.core_properties.title = "Property Inspection Report"
     doc.core_properties.author = "PhillyScript"
 
-    # Add appropriate headers and boilerplate content based on report type
-    if report_type == 'inventory':
-        # INVENTORY CHECK-IN REPORT FORMAT
-        title = doc.add_heading('INVENTORY', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Format the inspection date
+    try:
+        # Parse the date from the form (YYYY-MM-DD)
+        inspection_date_obj = datetime.strptime(inspection_date, '%Y-%m-%d')
+        # Format as Month Day, Year
+        formatted_date = inspection_date_obj.strftime('%B %d, %Y')
+    except:
+        # Fallback to the provided string if parsing fails
+        formatted_date = inspection_date
 
-        # Add And
-        and_heading = doc.add_heading('And', 0)
-        and_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add CHECK IN
-        checkin_heading = doc.add_heading('CHECK IN', 0)
-        checkin_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add subtitle
-        subtitle = doc.add_paragraph('Of the contents and conditions for')
-        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add property address placeholder
-        address_para = doc.add_paragraph('[House Address]')
-        address_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add date of inspection
-        date_para = doc.add_paragraph(f"Date of inspection: {datetime.now().strftime('%B %d, %Y')}")
-        date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add prepared by
-        prepared_para = doc.add_paragraph('PREPARED BY: PhillyScript')
-        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add important information heading
-        info_heading = doc.add_heading('Important Information', level=1)
-        info_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
-        # Add important information text
-        info_text = doc.add_paragraph(
-            "The Tenant /Tenant's representative and landlord should sign this document to signify that they have read and understood each page and accept that this Inventory and Check in is a true and accurate representation at the date so specified of the Property at the address stated above. Amendments to this document may be made within 5 days from the date the report is sent out. If no amendments are made within this time the parties will be deemed to accept the document as an accurate representation at the date so specified of the property at the address so stated above without the need for signature. This document should be returned, signed and dated no later than 5 days from the date the report is sent out.")
-
-        # Add table of contents heading
-        toc_heading = doc.add_heading('Table of Contents', level=1)
-
-        # Add placeholder table of contents
-        toc = doc.add_table(rows=1, cols=2)
-        toc.style = 'Table Grid'
-        header_cells = toc.rows[0].cells
-        header_cells[0].text = 'Contents'
-        header_cells[1].text = 'Page number'
-
-        # Add disclaimers section (this would normally be several pages)
-        doc.add_heading('INVENTORY DISCLAIMERS', level=1)
-
-        disclaimer_table = doc.add_table(rows=10, cols=2)
-        disclaimer_table.style = 'Table Grid'
-
-        # Add sample disclaimer content
-        disclaimer_rows = [
-            ("1.", "Structural", "This Inventory does not constitute a structural survey of the Property."),
-            ("2.", "General",
-             "This Inventory has been prepared on the accepted principle that all items are free from any obvious damage, fault or soiling except where stated."),
-            ("3.", "Description",
-             "Where the words 'gold', 'brass', 'oak', 'walnut' etc are used, it is understood that this is a description of the colour and type of the item and not the actual fabric, unless documentary evidence is available."),
-            # Add more rows as needed
-        ]
-
-        for i, (num, title, desc) in enumerate(disclaimer_rows[:3]):  # Just add first 3 for example
-            cells = disclaimer_table.rows[i].cells
-            cells[0].text = num + " " + title
-            cells[1].text = desc
-
-    elif report_type == 'full':
-        # FULL CHECK-IN REPORT FORMAT
-        title = doc.add_heading('Full Check-In Report', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add date
-        date_paragraph = doc.add_paragraph()
-        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
-        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add introduction
-        doc.add_heading('Introduction', level=1)
-        doc.add_paragraph(
-            "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention. Items marked with 'TR' indicate tenant responsibility.")
-
-    elif report_type == 'checkout':
-        # CHECK-OUT REPORT FORMAT
-        title = doc.add_heading('Check-Out Report', 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add date
-        date_paragraph = doc.add_paragraph()
-        date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
-        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # Add introduction
-        doc.add_heading('Introduction', level=1)
-        doc.add_paragraph(
-            "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report. Items marked with 'TR' indicate tenant responsibility.")
-
-    # Add a page break before starting the room-based sections
-    doc.add_page_break()
+    # REPLACE ALL THIS BOILERPLATE CODE:
+    # if report_type == 'inventory':
+    #     # INVENTORY CHECK-IN REPORT FORMAT
+    #     title = doc.add_heading('INVENTORY', 0)
+    #     ...
+    # WITH THIS SINGLE LINE:
+    generate_report_boilerplate(doc, report_type, address, formatted_date, on_behalf_of)
 
     # Group the data by room - using a simple approach to handle empty room cells
     room_data = {}
@@ -1561,7 +1977,41 @@ def generate_docx_report(csv_path, report_type='full'):
         room_heading = doc.add_heading(numbered_room_heading, level=1)
         room_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-        # Create a table for this room
+        # Add room images if available
+        if room in room_images and room_images[room]:
+            # Add subheading for images
+            img_heading = doc.add_heading('Room Images', level=2)
+
+            # Determine how many images to add per row (2 or 3 depending on number of images)
+            num_images = len(room_images[room])
+            images_per_row = 2 if num_images > 4 else 3
+
+            # Add images in rows
+            for i in range(0, num_images, images_per_row):
+                # Create a table for this row of images
+                img_table = doc.add_table(rows=1, cols=images_per_row)
+                img_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+                # Add images to the table cells
+                for j in range(images_per_row):
+                    if i + j < num_images:
+                        img_path = room_images[room][i + j]
+                        cell = img_table.cell(0, j)
+
+                        try:
+                            # Try to add the image to the cell
+                            paragraph = cell.paragraphs[0]
+                            run = paragraph.add_run()
+                            run.add_picture(img_path, width=Inches(2.0))
+                        except Exception as e:
+                            # If adding the image fails, add a placeholder text
+                            cell.text = f"[Image {i + j + 1}]"
+                            print(f"Error adding image: {str(e)}")
+
+                # Add some space after the table
+                doc.add_paragraph()
+
+        # Create a table for this room's inventory items
         # Columns: Attribute, Feature, Comment, Tenant Responsibility (TR)
         table = doc.add_table(rows=1, cols=4)
         table.style = 'Table Grid'
@@ -1616,47 +2066,30 @@ def generate_docx_report(csv_path, report_type='full'):
         # Increment room counter for the next room
         room_counter += 1
 
-    # Add a page break before closing sections
-    doc.add_page_break()
-
-    # Add closing content based on report type
-    if report_type == 'inventory':
-        # Add tenant and landlord declaration section
-        doc.add_heading('TENANT DECLARATION', level=1)
-        doc.add_paragraph(
-            "The items listed in this inventory/check in have been inspected and found to be in the condition indicated.")
-        doc.add_paragraph(
-            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
-
-        # Add signature fields
-        doc.add_paragraph("Name …………………………………………………………………")
-        doc.add_paragraph("Signed for the Tenant ……………………………………………………")
-
-        doc.add_heading('LANDLORD DECLARATION', level=1)
-        doc.add_paragraph(
-            "The items listed in this inventory/check in have been inspected and found to be in the condition indicated.")
-        doc.add_paragraph(
-            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
-
-        # Add signature fields
-        doc.add_paragraph("Name ……………………………………………………………………")
-        doc.add_paragraph("Signed for the Landlord …………………………………………………")
-
-    elif report_type == 'full' or report_type == 'checkout':
-        # Add summary
-        doc.add_heading('Summary', level=1)
-        if report_type == 'full':
-            doc.add_paragraph(
-                "This full check-in report provides a comprehensive overview of the property's condition at the beginning of the tenancy. Please address any issues identified in this report promptly.")
-        else:  # checkout
-            doc.add_paragraph(
-                "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy. Any discrepancies with the check-in report have been noted.")
+    # REPLACE ALL THIS CLOSING CODE:
+    # # Add a page break before closing sections
+    # doc.add_page_break()
+    #
+    # # Add closing content based on report type
+    # if report_type == 'inventory':
+    #     # Add tenant and landlord declaration section
+    #     ...
+    # WITH THIS SINGLE LINE:
+    generate_report_closing(doc, report_type, 124)  # 124 is a placeholder for page count
 
     # Save the document with report type in the filename
     result_id = str(uuid.uuid4())
     filename = f"{result_id}_{report_type}_report.docx"
     result_path = RESULT_FOLDER / filename
     doc.save(result_path)
+
+    # Clean up temporary image files
+    for room_img_list in room_images.values():
+        for img_path in room_img_list:
+            try:
+                Path(img_path).unlink(missing_ok=True)
+            except:
+                pass
 
     return result_path
 
