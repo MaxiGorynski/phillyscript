@@ -1,65 +1,257 @@
 from flask import Flask, request, render_template, send_file, jsonify, send_from_directory
 import os
-import speech_recognition as sr
+import uuid
 from pathlib import Path
+import logging
+import boto3
+from io import BytesIO
+import logging
+import shutil
+import openai
+
+# Configure logging first - increase level to see more details
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Initialise Flask app
+application = Flask(__name__)
+app = application  # AWS ElasticBeanstalk looks for 'application' while Flask CLI looks for 'app'
+
+# Configure app before importing other modules
+application.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-local-only')
+
+client = openai.OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY")
+)
+
+# Get DATABASE_URL from environment, with a SQLite fallback
+database_url = os.environ.get('DATABASE_URL')
+logger.info(f"Database URL from environment: {database_url}")
+
+# Determine which database to use
+if not database_url or 'rds.amazonaws.com' in database_url:
+    fallback_db = 'sqlite:///fallback.db'
+    logger.warning(f"Using fallback database: {fallback_db}")
+    application.config['SQLALCHEMY_DATABASE_URI'] = fallback_db
+else:
+    application.config['SQLALCHEMY_DATABASE_URI'] = database_url
+
+# Now that the database URI is set, we can try to download from S3 if it's SQLite
+if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+    db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+    s3_bucket = os.environ.get('S3_BUCKET', 'your-backup-bucket-name')
+
+    try:
+        # Download DB from S3 if it exists
+        s3 = boto3.client('s3')
+        s3.download_file(s3_bucket, 'db_backup/' + os.path.basename(db_file), db_file)
+        logger.info(f"Downloaded database from S3: {db_file}")
+    except Exception as e:
+        logger.warning(f"Could not download database from S3: {str(e)}")
+
+# Define backup function to be used later
+def backup_db_to_s3():
+    if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+        db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        s3_bucket = os.environ.get('S3_BUCKET', 'your-backup-bucket-name')
+
+        try:
+            # Upload DB to S3
+            s3 = boto3.client('s3')
+            s3.upload_file(db_file, s3_bucket, 'db_backup/' + os.path.basename(db_file))
+            logger.info(f"Backed up database to S3: {db_file}")
+        except Exception as e:
+            logger.warning(f"Could not back up database to S3: {str(e)}")
+
+application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+application.config['TEMPLATES_AUTO_RELOAD'] = True
+
+# Database configuration needs to be engine-specific
+if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+    # SQLite-specific options
+    application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'connect_args': {'check_same_thread': False}
+    }
+else:
+    # PostgreSQL-specific options
+    application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_recycle': 280,
+        'pool_timeout': 10,
+        'connect_args': {
+            'connect_timeout': 5  # PostgreSQL connection timeout in seconds
+        }
+    }
+
+# Log the database we're connecting to
+logger.info(f"Configured database: {application.config['SQLALCHEMY_DATABASE_URI']}")
+
+S3_AVAILABLE = False
+
+try:
+    import boto3
+    S3_AVAILABLE = True
+except ImportError:
+    logger.warning("boto3 not available, S3 integration will be disabled")
+
+
+def backup_db_to_s3():
+    if not S3_AVAILABLE:
+        logger.warning("S3 not available, skipping backup")
+        return False
+
+    if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+        db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        s3_bucket = os.environ.get('S3_BUCKET')
+
+        if not s3_bucket:
+            logger.warning("S3_BUCKET not set, skipping backup")
+            return False
+
+        try:
+            # Upload DB to S3
+            s3 = boto3.client('s3')
+            s3.upload_file(db_file, s3_bucket, 'db_backup/' + os.path.basename(db_file))
+            logger.info(f"Backed up database to S3: {db_file}")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not back up database to S3: {str(e)}")
+            return False
+    return False
+
+# Make backup function available globally
+application.backup_db_to_s3 = backup_db_to_s3
+
+# Import db and login_manager from extensions
+from extensions import db, login_manager
+
+# Initialize extensions with the application
+db.init_app(application)
+login_manager.init_app(application)
+login_manager.login_view = 'auth.login'
+
+# Create folders for file storage
+UPLOAD_FOLDER = Path('/tmp/temp_uploads')
+TRANSCRIPT_FOLDER = Path('/tmp/temp_transcripts')
+RESULT_FOLDER = Path('/tmp/results')
+
+for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER, RESULT_FOLDER]:
+    folder.mkdir(exist_ok=True, parents=True)
+
+
+# Create a diagnostic route BEFORE importing models
+@application.route('/api/diagnostics')
+def diagnostics():
+    db_status = "unknown"
+    try:
+        with db.engine.connect() as conn:
+            conn.execute("SELECT 1")
+            db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+
+    return jsonify({
+        'status': 'ok',
+        'message': 'API is running',
+        'database': {
+            'status': db_status,
+            'uri': application.config['SQLALCHEMY_DATABASE_URI'].split('@')[-1].split('/')[0]
+            if '@' in application.config['SQLALCHEMY_DATABASE_URI'] else 'local'
+        },
+        'environment': {
+            'FLASK_ENV': os.environ.get('FLASK_ENV', 'production')
+        }
+    })
+
+
+# Import models and auth AFTER initializing the database
+try:
+    from models import User
+
+    logger.info("Models imported successfully")
+except Exception as e:
+    logger.error(f"Error importing models: {str(e)}")
+
+
+    # Create a minimal User model for the app to run
+    class User(db.Model):
+        id = db.Column(db.Integer, primary_key=True)
+        username = db.Column(db.String(80), unique=True, nullable=False)
+        email = db.Column(db.String(120), unique=True, nullable=False)
+        is_active = db.Column(db.Boolean, default=True)
+
+        def get_id(self):
+            return str(self.id)
+
+        @property
+        def is_authenticated(self):
+            return True
+
+        @property
+        def is_anonymous(self):
+            return False
+
+# Import auth blueprint
+try:
+    from auth import auth as auth_blueprint
+
+    application.register_blueprint(auth_blueprint)
+    logger.info("Auth blueprint registered successfully")
+except Exception as e:
+    logger.error(f"Error registering auth blueprint: {str(e)}")
+    # Create a minimal auth blueprint for the app to run
+    from flask import Blueprint
+
+    auth_blueprint = Blueprint('auth', __name__)
+    application.register_blueprint(auth_blueprint)
+
+
+# Configure user loader
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        return User.query.get(int(user_id))
+    except:
+        return None
+
+
+# Import the rest of your dependencies
+import speech_recognition as sr
 from pydub import AudioSegment
 import pandas as pd
-import uuid
 import cv2
 import numpy as np
-import uuid
+import re
 from werkzeug.utils import secure_filename
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 import difflib
-import os
-from werkzeug.utils import secure_filename
-import uuid
-import re
 from docx import Document
-from io import BytesIO
 from datetime import datetime
-from flask_login import LoginManager, login_required, current_user
-from models import db, User
-from auth import auth as auth_blueprint
+from flask_login import login_required, current_user
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-local-only')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///users.db')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-db.init_app(app)
+# Create database tables ONCE within an application context with improved error handling
+try:
+    with application.app_context():
+        # Test the database connection first
+        try:
+            logger.info("Testing database connection...")
+            with db.engine.connect() as conn:
+                conn.execute("SELECT 1")
+            logger.info("Database connection successful!")
 
-#Initialise Flask-Login
-login_manager = LoginManager()
-login_manager.login_view = 'auth.login'
-login_manager.init_app(app)
-
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
-
-# Register the auth blueprint
-app.register_blueprint(auth_blueprint)
-
-# Create all database tables
-with app.app_context():
-    db.create_all()
-
-# Add this configuration
-app.config['TEMPLATES_AUTO_RELOAD'] = True
-
-# Create directories for uploads and transcripts
-UPLOAD_FOLDER = Path('temp_uploads')
-TRANSCRIPT_FOLDER = Path('temp_transcripts')
-TRANSCRIPT_FOLDER.mkdir(exist_ok=True)
-RESULT_FOLDER = Path('static/results')
-UPLOAD_FOLDER.mkdir(exist_ok=True)
-RESULT_FOLDER.mkdir(exist_ok=True, parents=True)
-
-for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER, RESULT_FOLDER]: folder.mkdir(exist_ok=True, parents=True)
-
+            # Create tables if the connection was successful
+            logger.info("Creating database tables...")
+            db.create_all()
+            logger.info("Database tables created successfully")
+        except Exception as e:
+            logger.error(f"Error with database: {str(e)}")
+            logger.warning("Application will continue with limited functionality")
+except Exception as e:
+    logger.error(f"Database initialization error: {str(e)}")
+    logger.warning("Application will run in fallback mode")
 
 def convert_to_wav(audio_path):
     """
@@ -305,102 +497,160 @@ def format_text(text):
 
     return formatted_text
 
+def debug_raw_transcript(audio_path):
+    """Debug function to show raw transcription before any processing."""
+    transcript = transcribe_audio_optimized(audio_path)
+    print("\n--- RAW TRANSCRIPT ---")
+    print(transcript)
+    print("--- END RAW TRANSCRIPT ---\n")
+    return transcript
 
-def process_transcript(transcript):
+def correct_transcript_with_gpt(transcript):
     """
-    Process transcript text to extract features and comments.
-    Returns a list of dictionaries containing features and comments.
-    Also detects 'Tenant Responsibility' mentions in comments.
+    Use GPT-3.5-Turbo to correct property inspection transcription errors
+    while strictly preserving the format.
+
+    Args:
+        transcript: The raw transcription text from basic speech recognition
+
+    Returns:
+        Corrected transcript text with domain-specific terms fixed
     """
-    print("\nProcessing transcript...")
-    results = []
-    current_feature = None
-    is_first_comment = True
+    try:
+        # Skip processing if transcript is empty
+        if not transcript:
+            return transcript
 
-    # Split transcript into words for easier processing
-    words = transcript.split()
-    i = 0
+        # Log the original transcript for debugging
+        logging.info(f"Original transcript: {transcript}")
 
-    while i < len(words):
-        # Check for "new feature"
-        if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-            # Start collecting new feature
-            current_feature = ""
-            is_first_comment = True
-            i += 2  # Skip "new feature"
+        # Create a system prompt with property inspection domain knowledge
+        # with strict instructions about format preservation
+        system_prompt = """You are an expert assistant for property inspectors. 
+        Your task is to correct property inspection transcription errors while precisely maintaining the exact format.
 
-            # Collect feature text until "comment" or another "new feature"
-            while i < len(words):
-                if words[i] == "comment":
-                    break
-                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-                    i -= 1  # Back up to process new feature
-                    break
-                current_feature += words[i] + " "
-                i += 1
+        EXTREMELY IMPORTANT: You must preserve all format markers EXACTLY as they appear:
+        - "new room" must remain exactly as "new room"
+        - "new attribute" must remain exactly as "new attribute"
+        - "new feature" must remain exactly as "new feature" 
+        - "comment" must remain exactly as "comment"
 
-            current_feature = current_feature.strip()
-            # Apply text formatting to the feature
-            current_feature = format_text(current_feature)
-            print(f"Found new feature: {current_feature}")
+        These markers control how the transcript is processed, and any change to them will break the processing.
 
-        # Check for "comment"
-        elif words[i] == "comment":
-            i += 1  # Skip "comment"
-            comment_text = ""
+        Only correct real estate terminology, proper nouns, and obvious speech recognition errors:
+        - "Germany" should be corrected to "generally" when referring to condition
+        - "Mark" to "mark" when not referring to a person's name
+        - "tennant" to "tenant"
+        - "lanlord" to "landlord"
 
-            # Collect comment text until another "comment" or "new feature"
-            while i < len(words):
-                if words[i] == "comment":
-                    break
-                if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-                    i -= 1  # Back up to process new feature
-                    break
-                comment_text += words[i] + " "
-                i += 1
+        DO NOT add punctuation, capitalization, or restructure the text in any way.
+        DO NOT combine or split sections marked by these key phrases.
+        DO NOT add or remove any "new room", "new attribute", "new feature", or "comment" markers.
 
-            comment_text = comment_text.strip()
+        Return ONLY the corrected transcript with minimal changes.
+        """
 
-            # Check for "Tenant Responsibility" in the comment
-            is_tenant_responsibility = False
-            # Convert to lowercase for case-insensitive matching
-            comment_lower = comment_text.lower()
-            if "tenant responsibility" in comment_lower:
-                is_tenant_responsibility = True
-                print("Tenant Responsibility detected in comment")
+        # Send the transcript to GPT-3.5-Turbo for correction
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",
+                 "content": f"Correct ONLY the terminology errors in this property inspection transcript while preserving the exact format:\n\n{transcript}"}
+            ],
+            temperature=0.1,  # Very low temperature for more deterministic output
+            max_tokens=2000
+        )
 
-            # Apply text formatting to the comment
-            comment_text = format_text(comment_text)
-            print(f"Found comment: {comment_text}")
+        # Extract the corrected text
+        corrected_transcript = response.choices[0].message.content.strip()
 
-            # Add to results if we have a feature
-            if current_feature:
-                results.append({
-                    "Feature": current_feature if is_first_comment else " ",  # Empty space for subsequent comments
-                    "Comment": comment_text,
-                    "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
-                })
-                print(f"Added row - Feature: {'[First]' if is_first_comment else '[Subsequent]'}, " +
-                      f"Comment: {comment_text}, TR: {'Yes' if is_tenant_responsibility else 'No'}")
-                is_first_comment = False
+        # Log the corrected transcript for debugging
+        logging.info(f"Corrected transcript: {corrected_transcript}")
 
-        else:
-            i += 1
+        # Check if key markers are preserved
+        key_markers = ["new room", "new attribute", "new feature", "comment"]
+        for marker in key_markers:
+            original_count = transcript.lower().count(marker)
+            corrected_count = corrected_transcript.lower().count(marker)
 
-    print(f"\nProcessed {len(results)} feature-comment pairs")
-    return results
+            if original_count != corrected_count:
+                logging.warning(
+                    f"Format marker '{marker}' count changed! Original: {original_count}, Corrected: {corrected_count}")
+                return transcript  # Return original if format changed
+
+        return corrected_transcript
+
+    except Exception as e:
+        logging.error(f"Error in GPT correction: {str(e)}")
+        # Fall back to original transcript if API call fails
+        return transcript
 
 
-def process_audio_file(file_path, original_filename):
-    """Process audio file and create a CSV."""
-    # Transcribe the audio
+def correct_csv_with_gpt(csv_path):
+    """
+    Process a completed transcript CSV with GPT to correct terminology and speech errors.
+
+    Args:
+        csv_path: Path to the CSV file containing transcription data
+
+    Returns:
+        Path to the corrected CSV file
+    """
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_path)
+
+        # Check if we have comments to process
+        if 'Comment' not in df.columns:
+            logging.warning(f"No 'Comment' column found in {csv_path}")
+            return csv_path
+
+        # Process each comment with GPT-4
+        logging.info(f"Processing {len(df)} comments with GPT-4")
+        for i, row in df.iterrows():
+            if pd.notna(row['Comment']) and row['Comment'].strip():
+                original_comment = row['Comment']
+                corrected_comment = correct_transcript_with_gpt(original_comment)
+
+                # Update the dataframe with corrected comment
+                df.at[i, 'Comment'] = corrected_comment
+
+                # Log if there was a change
+                if original_comment != corrected_comment:
+                    logging.info(f"Correction made: '{original_comment}' → '{corrected_comment}'")
+
+        # Create path for corrected file
+        original_filename = Path(csv_path).name
+        corrected_filename = f"corrected_{original_filename}"
+        corrected_path = Path(csv_path).parent / corrected_filename
+
+        # Save the corrected CSV
+        df.to_csv(corrected_path, index=False)
+        logging.info(f"Corrected CSV saved to {corrected_path}")
+
+        return corrected_path
+
+    except Exception as e:
+        logging.error(f"Error processing CSV with GPT: {str(e)}")
+        # Return original path if processing fails
+        return csv_path
+
+
+# Modify your existing process_audio_file function to incorporate GPT correction
+def enhanced_process_audio_file(file_path, original_filename):
+    """Process audio file with enhanced GPT correction."""
+    # Get original transcription using your existing method
     transcript = transcribe_audio_optimized(file_path)
 
     if not transcript:
         return None, "Failed to transcribe audio"
 
-    # Process the transcript
-    results = process_transcript(transcript)
+    # Apply GPT correction to the full transcript before processing
+    corrected_transcript = correct_transcript_with_gpt(transcript)
+
+    # Process the corrected transcript using your existing function
+    results = process_transcript(corrected_transcript)
 
     if not results:
         return None, "No features found in the transcript"
@@ -419,13 +669,337 @@ def process_audio_file(file_path, original_filename):
     return output_path, None
 
 
+# Alternative approach: Post-process existing CSVs
+def post_process_existing_csv(csv_path):
+    """Apply GPT correction to an existing CSV file."""
+    return correct_csv_with_gpt(csv_path)
+
+
+def process_transcript(transcript):
+    """
+    Process transcript text to extract room, attribute, features and comments.
+    With additional debugging to ensure comments are captured.
+    """
+    print("\nProcessing transcript...")
+    print(f"Raw transcript (first 200 chars): {transcript[:200]}...")
+    results = []
+
+    # Initialize current state
+    current_room = ""
+    current_attribute = ""
+    current_feature = ""
+    current_mode = None
+
+    # Track already written fields for hierarchical display
+    written_rooms = set()
+    written_attributes = set()  # Track per room
+    written_features = set()  # Track per attribute
+
+    # Valid attributes list
+    valid_attributes = [
+        "doors", "floors", "skirting boards", "walls",
+        "cornicing", "ceilings", "fixtures and fittings", "furniture"
+    ]
+
+    # Split transcript into words and print for debugging
+    words = transcript.split()
+    print(f"Transcript contains {len(words)} words")
+
+    # Count occurrences of key markers for debugging
+    markers = {
+        "new room": transcript.lower().count("new room"),
+        "new attribute": transcript.lower().count("new attribute"),
+        "new feature": transcript.lower().count("new feature"),
+        "comment": transcript.lower().count("comment")
+    }
+    print(f"Key markers found: {markers}")
+
+    i = 0
+    buffer = ""
+    comment_count = 0
+
+    while i < len(words):
+        # Print current position and context periodically for debugging
+        if i % 50 == 0:
+            context = " ".join(words[max(0, i - 5):min(len(words), i + 5)])
+            print(f"Position {i}/{len(words)}, Context: '...{context}...'")
+
+        # Handle "new room"
+        if i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "room":
+            print(f"Found 'new room' at position {i}")
+
+            # Save pending comment if any
+            if current_mode == "comment" and buffer and current_feature:
+                comment_count += 1
+                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+                comment_text = format_text(buffer.strip())
+
+                print(f"Saving comment from buffer before new room: '{comment_text[:50]}...'")
+
+                # For hierarchical display: room appears only if not seen before
+                output_room = current_room if current_room not in written_rooms else ""
+                if current_room not in written_rooms:
+                    written_rooms.add(current_room)
+
+                # For attribute hierarchical display
+                room_attr_key = f"{current_room}:{current_attribute}"
+                output_attribute = current_attribute if room_attr_key not in written_attributes else ""
+                if room_attr_key not in written_attributes:
+                    written_attributes.add(room_attr_key)
+
+                # For feature hierarchical display
+                attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
+                output_feature = current_feature if attr_feature_key not in written_features else ""
+                if attr_feature_key not in written_features:
+                    written_features.add(attr_feature_key)
+
+                # Add the comment as a new row
+                results.append({
+                    "Room": output_room,
+                    "Attribute": output_attribute,
+                    "Feature": output_feature,
+                    "Comment": comment_text,
+                    "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
+                })
+                print(f"Added comment #{comment_count}: {comment_text[:50]}...")
+                buffer = ""
+
+            # Move to room collection
+            current_mode = "room"
+            buffer = ""
+
+            # Reset tracking for hierarchical display since we're starting a new room
+            written_attributes = set()
+            written_features = set()
+
+            i += 2
+            continue
+
+        # Handle "new attribute"
+        elif i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "attribute":
+            print(f"Found 'new attribute' at position {i}")
+
+            # Save room data
+            if current_mode == "room" and buffer:
+                cleaned_buffer = buffer.strip()
+                if cleaned_buffer.endswith('.'):
+                    cleaned_buffer = cleaned_buffer[:-1]
+                current_room = cleaned_buffer
+                print(f"Set current room to: {current_room}")
+
+            # Move to attribute collection
+            current_mode = "attribute"
+            buffer = ""
+
+            # Reset feature tracking for this new attribute
+            written_features = set()
+
+            i += 2
+            continue
+
+        # Handle "new feature"
+        elif i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "feature":
+            print(f"Found 'new feature' at position {i}")
+
+            # Save attribute data
+            if current_mode == "attribute" and buffer:
+                cleaned_buffer = buffer.strip()
+                if cleaned_buffer.endswith('.'):
+                    cleaned_buffer = cleaned_buffer[:-1]
+                normalized_buffer = cleaned_buffer.lower()
+
+                if any(attr == normalized_buffer for attr in valid_attributes):
+                    current_attribute = normalized_buffer.title()
+                    print(f"Set current attribute to: {current_attribute}")
+                else:
+                    closest_match = min(valid_attributes, key=lambda x:
+                    sum(1 for a, b in zip(x, normalized_buffer) if a != b))
+                    current_attribute = closest_match.title()
+                    print(f"Invalid attribute '{normalized_buffer}', using closest match: {current_attribute}")
+
+            # Move to feature collection
+            current_mode = "feature"
+            buffer = ""
+            i += 2
+            continue
+
+        # Handle "comment" - THE KEY PART FOR FIXING MULTIPLE COMMENTS
+        elif words[i].lower() == "comment":
+            print(f"Found 'comment' at position {i}")
+
+            # Save feature data if coming from feature mode
+            if current_mode == "feature" and buffer:
+                cleaned_buffer = buffer.strip()
+                if cleaned_buffer.endswith('.'):
+                    cleaned_buffer = cleaned_buffer[:-1]
+                current_feature = cleaned_buffer
+                print(f"Set current feature to: {current_feature}")
+
+            # CRITICAL: If we're already in comment mode, save the previous comment
+            # as a separate row BEFORE starting to collect the new comment
+            if current_mode == "comment" and buffer and current_feature:
+                comment_count += 1
+                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+                comment_text = format_text(buffer.strip()) if callable(format_text) else buffer.strip()
+
+                print(f"Saving comment from buffer before new comment: '{comment_text[:50]}...'")
+
+                # For hierarchical display: room appears only if not seen before
+                output_room = current_room if current_room not in written_rooms else ""
+                if current_room not in written_rooms:
+                    written_rooms.add(current_room)
+
+                # For attribute hierarchical display
+                room_attr_key = f"{current_room}:{current_attribute}"
+                output_attribute = current_attribute if room_attr_key not in written_attributes else ""
+                if room_attr_key not in written_attributes:
+                    written_attributes.add(room_attr_key)
+
+                # For feature hierarchical display
+                attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
+                output_feature = current_feature if attr_feature_key not in written_features else ""
+                if attr_feature_key not in written_features:
+                    written_features.add(attr_feature_key)
+
+                # Add this comment as a separate row
+                results.append({
+                    "Room": output_room,
+                    "Attribute": output_attribute,
+                    "Feature": output_feature,
+                    "Comment": comment_text,
+                    "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
+                })
+                print(f"Added comment #{comment_count}: {comment_text[:50]}...")
+
+            # Reset for new comment
+            current_mode = "comment"
+            buffer = ""
+            i += 1
+            continue
+
+        # Add word to buffer
+        if current_mode:
+            buffer += words[i] + " "
+
+        # Move to next word
+        i += 1
+
+    # Handle final pending comment
+    if current_mode == "comment" and buffer and current_feature:
+        comment_count += 1
+        is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+        comment_text = format_text(buffer.strip()) if callable(format_text) else buffer.strip()
+
+        print(f"Saving final comment from buffer: '{comment_text[:50]}...'")
+
+        # For hierarchical display: room appears only if not seen before
+        output_room = current_room if current_room not in written_rooms else ""
+        if current_room not in written_rooms:
+            written_rooms.add(current_room)
+
+        # For attribute hierarchical display
+        room_attr_key = f"{current_room}:{current_attribute}"
+        output_attribute = current_attribute if room_attr_key not in written_attributes else ""
+        if room_attr_key not in written_attributes:
+            written_attributes.add(room_attr_key)
+
+        # For feature hierarchical display
+        attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
+        output_feature = current_feature if attr_feature_key not in written_features else ""
+        if attr_feature_key not in written_features:
+            written_features.add(attr_feature_key)
+
+        results.append({
+            "Room": output_room,
+            "Attribute": output_attribute,
+            "Feature": output_feature,
+            "Comment": comment_text,
+            "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
+        })
+        print(f"Added final comment #{comment_count}: {comment_text[:50]}...")
+
+    print(f"\nProcessed {len(results)} entries")
+    print(f"Total comments found: {comment_count}")
+
+    # Last sanity check - just in case format_text is failing
+    for i, result in enumerate(results):
+        if not result["Comment"] and "comment" in result:
+            # Possible fallback if the "Comment" field is empty but a comment exists
+            results[i]["Comment"] = result.get("comment", "")
+            print(f"Fixed missing Comment in row {i}")
+
+    return results
+
+
+def process_audio_file(file_path, original_filename):
+    """Process audio file with enhanced GPT correction and proper multi-comment handling."""
+    # Get original transcription using your existing method
+    transcript = transcribe_audio_optimized(file_path)
+
+    if not transcript:
+        return None, "Failed to transcribe audio"
+
+    # Apply GPT correction to the full transcript before processing
+    corrected_transcript = correct_transcript_with_gpt(transcript)
+
+    # Log the original and corrected transcripts for debugging
+    print(f"Original transcript: {transcript[:200]}...")
+    print(f"Corrected transcript: {corrected_transcript[:200]}...")
+
+    # Process the corrected transcript using your existing function
+    results = process_transcript(corrected_transcript)
+
+    if not results:
+        return None, "No features found in the transcript"
+
+    # Log the results before DataFrame conversion for debugging
+    print(f"Results from process_transcript: {len(results)} entries")
+    for i, entry in enumerate(results):
+        print(f"Entry {i}: Room='{entry.get('Room', '')}', Attr='{entry.get('Attribute', '')}', "
+              f"Feature='{entry.get('Feature', '')}', Comment='{entry.get('Comment', '')}'")
+
+    # Create DataFrame - MAKE SURE TO CAPTURE ALL COLUMNS
+    df = pd.DataFrame(results)
+
+    # Generate output filename based on input audio filename
+    base_filename = Path(original_filename).stem
+    output_filename = f"{base_filename}_transcript.csv"
+    output_path = TRANSCRIPT_FOLDER / output_filename
+
+    # Save to CSV - ENSURE THAT ALL COLUMNS ARE SAVED
+    df.to_csv(output_path, index=False)
+
+    # Log the DataFrame before saving to verify content
+    print(f"DataFrame shape before saving: {df.shape}")
+    print(f"DataFrame columns: {df.columns.tolist()}")
+
+    # Check if comments are present in the DataFrame
+    comment_count = df['Comment'].count()
+    print(f"Comment count in DataFrame: {comment_count}")
+
+    # Check if there are any missing comments
+    if comment_count < len(results):
+        print("WARNING: Some comments may be missing from the DataFrame!")
+
+    # Double-check the saved CSV file
+    try:
+        saved_df = pd.read_csv(output_path)
+        print(f"Saved CSV shape: {saved_df.shape}")
+        print(f"Saved CSV columns: {saved_df.columns.tolist()}")
+        print(f"Comment count in saved CSV: {saved_df['Comment'].count()}")
+    except Exception as e:
+        print(f"Error verifying saved CSV: {str(e)}")
+
+    return output_path, None
+
+
 # Add a basic test route
-@app.route('/test')
+@application.route('/test')
 def test():
     return "Server is working!"
 
 
-@app.route('/basic')
+@application.route('/basic')
 def basic():
     return """
     <!DOCTYPE html>
@@ -444,7 +1018,7 @@ def basic():
     </html>
     """
 
-@app.route('/')
+@application.route('/')
 def index():
     try:
         # Serve the index.html page as the root
@@ -453,7 +1027,7 @@ def index():
         return f"Error: {str(e)}"
 
 # Add a separate route for the transcription page
-@app.route('/transcribe')
+@application.route('/transcribe')
 @login_required
 def transcribe():
     try:
@@ -462,7 +1036,7 @@ def transcribe():
         return f"Error: {str(e)}"
 
 
-@app.route('/upload', methods=['POST'])
+@application.route('/upload', methods=['POST'])
 def upload_file():
     if 'audioFile' not in request.files:
         return jsonify({'status': 'error', 'message': 'No file part'})
@@ -499,8 +1073,7 @@ def upload_file():
     })
 
 
-# Update the process_file route to use multithreading
-@app.route('/process/<process_id>', methods=['POST'])
+@application.route('/process/<process_id>', methods=['POST'])
 def process_file(process_id):
     # Find the uploaded file
     uploaded_files = list(UPLOAD_FOLDER.glob(f"{process_id}_*"))
@@ -514,37 +1087,52 @@ def process_file(process_id):
     try:
         # Use a thread pool for parallel processing
         with ThreadPoolExecutor(max_workers=2) as executor:
-            # Use the optimized transcription function
-            transcript_future = executor.submit(transcribe_audio_optimized, str(file_path))
+            # Get options for processing
+            use_gpt = request.form.get('use_gpt', 'true').lower() == 'true'
 
-            # Wait for transcription to complete
-            transcript = transcript_future.result()
+            if use_gpt:
+                # Use the enhanced processing with GPT correction
+                future = executor.submit(enhanced_process_audio_file, str(file_path), original_filename)
+            else:
+                # Use the original transcription function
+                transcript_future = executor.submit(transcribe_audio_optimized, str(file_path))
+                transcript = transcript_future.result()
 
-            if not transcript:
-                return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
+                if not transcript:
+                    return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
 
-            # Process the transcript
-            results = process_transcript(transcript)
+                # Process the transcript
+                results = process_transcript(transcript)
 
-            if not results:
-                return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
+                if not results:
+                    return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
 
-            # Create DataFrame
-            df = pd.DataFrame(results)
+                # Create DataFrame
+                df = pd.DataFrame(results)
 
-            # Generate output filename based on input audio filename
-            base_filename = Path(original_filename).stem
-            output_filename = f"{base_filename}_transcript.csv"
-            output_path = TRANSCRIPT_FOLDER / output_filename
+                # Generate output filename based on input audio filename
+                base_filename = Path(original_filename).stem
+                output_filename = f"{base_filename}_transcript.csv"
+                output_path = TRANSCRIPT_FOLDER / output_filename
 
-            # Save to CSV
-            df.to_csv(output_path, index=False)
+                # Save to CSV
+                df.to_csv(output_path, index=False)
+
+                # Set the result
+                result_path, error_msg = output_path, None
+
+            if use_gpt:
+                # Get the result from the future if using GPT
+                result_path, error_msg = future.result()
+
+                if error_msg:
+                    return jsonify({'status': 'error', 'message': error_msg})
 
             # Return success with the output filename
             return jsonify({
                 'status': 'success',
-                'outputFilename': output_path.name,
-                'message': 'Processing complete'
+                'outputFilename': Path(result_path).name,
+                'message': 'Processing complete' + (' with GPT correction' if use_gpt else '')
             })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
@@ -556,7 +1144,35 @@ def process_file(process_id):
             pass
 
 
-@app.route('/download/<filename>', methods=['GET'])
+@application.route('/correct_csv/<filename>', methods=['POST'])
+@login_required
+def correct_csv(filename):
+    """Route to apply GPT correction to an existing CSV file."""
+    try:
+        # Find the CSV file
+        csv_path = TRANSCRIPT_FOLDER / filename
+        if not csv_path.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'CSV file not found'
+            })
+
+        # Apply GPT correction
+        corrected_path = post_process_existing_csv(csv_path)
+
+        # Return path to corrected file
+        return jsonify({
+            'status': 'success',
+            'outputFilename': Path(corrected_path).name,
+            'message': 'CSV corrected successfully'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error correcting CSV: {str(e)}'
+        })
+
+@application.route('/download/<filename>', methods=['GET'])
 def download_file(filename):
     file_path = TRANSCRIPT_FOLDER / filename
     if not file_path.exists():
@@ -566,20 +1182,37 @@ def download_file(filename):
     return send_file(file_path, as_attachment=True)
 
 
-@app.route('/diff_check')
+@application.route('/diff_check')
 @login_required
 def diff_check():
     """Render the image difference checker page"""
     return render_template('diff_check.html')
 
 
-@app.route('/diff_result/<result_id>')
+@application.route('/diff_result/<result_id>')
 def diff_result(result_id):
     """Render the results page for image comparison"""
     return render_template('diff_result.html')
 
 
-@app.route('/api/diff_result/<result_id>')
+@application.route('/api/check_files/<result_id>')
+def check_files(result_id):
+    """Check if result files exist"""
+    original_path = RESULT_FOLDER / f"{result_id}_original.jpg"
+    diff_path = RESULT_FOLDER / f"{result_id}_diff.jpg"
+
+    return jsonify({
+        'result_folder': str(RESULT_FOLDER),
+        'original_exists': original_path.exists(),
+        'diff_exists': diff_path.exists(),
+        'files_in_folder': [f.name for f in RESULT_FOLDER.iterdir() if f.is_file()][:10]  # List first 10 files
+    })
+@application.route('/results/<filename>')
+def serve_result_file(filename):
+    """Serve files from the results folder"""
+    return send_from_directory(RESULT_FOLDER, filename)
+
+@application.route('/api/diff_result/<result_id>')
 def get_diff_result(result_id):
     """API endpoint to get the image comparison results"""
     # Check if result exists
@@ -603,16 +1236,16 @@ def get_diff_result(result_id):
             except:
                 difference_count = 0
 
-    # Return paths and metadata
+    # Return paths and metadata with UPDATED URL PATHS
     return jsonify({
         'status': 'success',
-        'originalImageUrl': f"/static/results/{result_id}_original.jpg",
-        'diffImageUrl': f"/static/results/{result_id}_diff.jpg",
+        'originalImageUrl': f"/results/{result_id}_original.jpg",  # Updated path
+        'diffImageUrl': f"/results/{result_id}_diff.jpg",         # Updated path
         'differenceCount': difference_count
     })
 
 
-@app.route('/compare_images', methods=['POST'])
+@application.route('/compare_images', methods=['POST'])
 def compare_images():
     """Endpoint to handle image comparison uploads and processing"""
     if 'image1' not in request.files or 'image2' not in request.files:
@@ -732,14 +1365,14 @@ def process_image_difference(image1_path, image2_path, output_original_path, out
     return len(significant_contours)
 
 
-@app.route('/finalise_report')
+@application.route('/finalise_report')
 @login_required
 def finalise_report():
     """Render the finalise report page"""
     return render_template('finalise_report.html')
 
 
-@app.route('/compare_text', methods=['POST'])
+@application.route('/compare_text', methods=['POST'])
 @login_required
 def compare_text():
     """Endpoint to handle text comparison uploads and processing"""
@@ -806,7 +1439,7 @@ def compare_text():
         })
 
 
-@app.route('/view_comparison/<result_id>')
+@application.route('/view_comparison/<result_id>')
 def view_comparison(result_id):
     """Serve the comparison result directly"""
     result_path = RESULT_FOLDER / f"{result_id}_diff.html"
@@ -819,18 +1452,20 @@ def view_comparison(result_id):
 
     return html_content
 
-@app.route('/generate_report', methods=['POST'])
+
+@application.route('/generate_report', methods=['POST'])
 @login_required
 def generate_report():
     """Endpoint to handle report generation from CSV"""
     use_latest = request.form.get('useLatest') == 'true'
+    report_type = request.form.get('reportType', 'full')  # Default to full if not specified
 
     try:
         csv_path = None
 
         if use_latest:
             # Find the most recent CSV file in the transcripts folder
-            transcript_dir = Path('temp_transcripts')
+            transcript_dir = Path('/tmp/temp_transcripts')
             if not transcript_dir.exists():
                 return jsonify({
                     'status': 'error',
@@ -868,8 +1503,14 @@ def generate_report():
             csv_path = UPLOAD_FOLDER / f"{result_id}_{secure_filename(csv_file.filename)}"
             csv_file.save(csv_path)
 
-        # Generate report from CSV
-        result_path = generate_docx_report(csv_path)
+        # Generate report from CSV with the specified report type
+        # For now, all report types use the same generation function
+        # In the future, you can implement different generation logic based on report_type
+
+        # Log the report type being generated
+        logger.info(f"Generating report of type: {report_type}")
+
+        result_path = generate_docx_report(csv_path, report_type)
 
         # Clean up temporary file if it was uploaded
         if not use_latest:
@@ -878,7 +1519,7 @@ def generate_report():
         return jsonify({
             'status': 'success',
             'resultUrl': f"/download_report/{result_path.name}",
-            'message': 'Report generated successfully'
+            'message': f'Report generated successfully'
         })
 
     except Exception as e:
@@ -886,13 +1527,265 @@ def generate_report():
         if csv_path and not use_latest and csv_path.exists():
             csv_path.unlink(missing_ok=True)
 
+        logger.error(f"Error generating report: {str(e)}")
         return jsonify({
             'status': 'error',
             'message': f'Error generating report: {str(e)}'
         })
 
 
-@app.route('/download_report/<filename>')
+def generate_report_boilerplate(doc, report_type, address, inspection_date, on_behalf_of):
+    """
+    Generate standardized boilerplate content for different report types.
+
+    Args:
+        doc: The Document object to add content to
+        report_type: Type of report ('inventory', 'full', or 'checkout')
+        address: Property address
+        inspection_date: Date of inspection (formatted string)
+        on_behalf_of: Preparer name
+    """
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    # Add logo (placeholder)
+    # In a real implementation, you would add a company logo here
+    logo_paragraph = doc.add_paragraph()
+    logo_paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    logo_run = logo_paragraph.add_run("Ft² Inventories")
+    logo_run.bold = True
+    logo_run.font.size = Pt(16)
+
+    # Add address on the right side
+    address_paragraph = doc.add_paragraph()
+    address_paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    address_run = address_paragraph.add_run(address)
+
+    # Add main report titles based on report type
+    if report_type == 'inventory':
+        # INVENTORY CHECK-IN REPORT FORMAT
+        title = doc.add_heading('INVENTORY', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add And
+        and_heading = doc.add_heading('And', 0)
+        and_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add CHECK IN
+        checkin_heading = doc.add_heading('CHECK IN', 0)
+        checkin_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add subtitle
+        subtitle = doc.add_paragraph('Of the contents and conditions for')
+        subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add property address in a box
+        address_box_para = doc.add_paragraph()
+        address_box_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        address_box = address_box_para.add_run(address)
+
+        # Add date of inspection
+        date_para = doc.add_paragraph(f"Date of inspection: {inspection_date}")
+        date_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add prepared by
+        prepared_para = doc.add_paragraph(f"PREPARED BY: Ft² Inventories Ltd")
+        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add company address
+        company_address = doc.add_paragraph("Birch Tree House, Glympton Road, Wootton, Woodstock, OX20 1EJ")
+        company_address.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add company contact
+        company_contact = doc.add_paragraph("info@ft2inventories.co.uk  020 8004 3324")
+        company_contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add on behalf of section
+        behalf_para = doc.add_paragraph("On behalf of:")
+        behalf_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+        # Add name in a table
+        behalf_table = doc.add_table(rows=1, cols=2)
+        behalf_table.autofit = False
+        behalf_table.columns[0].width = Inches(1)
+        behalf_table.columns[1].width = Inches(5)
+        behalf_cells = behalf_table.rows[0].cells
+        behalf_cells[0].text = "Name"
+        behalf_cells[1].text = on_behalf_of
+
+        # Add important information heading
+        info_heading = doc.add_heading('Important Information', level=1)
+        info_heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+        # Add important information text
+        info_text = doc.add_paragraph(
+            "The Tenant /Tenant's representative and landlord should sign this document to signify that they have read and understood each page and accept that this Inventory and Check in is a true and accurate representation at the date so specified of the Property at the address stated above. Amendments to this document may be made within 5 days from the date the report is sent out. If no amendments are made within this time the parties will be deemed to accept the document as an accurate representation at the date so specified of the property at the address so stated above without the need for signature. This document should be returned, signed and dated no later than 5 days from the date the report is sent out.")
+
+        # Add table of contents heading
+        toc_heading = doc.add_heading('Table of Contents', level=1)
+
+        # Add placeholder table of contents
+        toc = doc.add_table(rows=6, cols=2)
+        toc.style = 'Table Grid'
+
+        # Add table of contents rows
+        toc_rows = [
+            ("Contents", "Page number"),
+            ("Disclaimer and important information", "[tc1]"),
+            ("General description of conditions/ Utility readings", "[tc2]"),
+            ("Front Door and Entrance Hall", "[tc3]"),
+            ("Bedroom", "[tc4]"),
+            ("Bathroom", "[tc5]")
+        ]
+
+        for i, (content, page) in enumerate(toc_rows):
+            cells = toc.rows[i].cells
+            cells[0].text = content
+            cells[1].text = page
+
+        # Add a page break before disclaimer section
+        doc.add_page_break()
+
+        # Add INVENTORY DISCLAIMERS heading
+        disclaimer_heading = doc.add_heading('INVENTORY DISCLAIMERS', level=1)
+        disclaimer_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add disclaimer table
+        disclaimer_table = doc.add_table(rows=10, cols=2)
+        disclaimer_table.style = 'Table Grid'
+
+        # Add disclaimer content (just a few examples)
+        disclaimer_rows = [
+            ("1.", "Structural", "This Inventory does not constitute a structural survey of the Property."),
+            ("2.", "General",
+             "This Inventory has been prepared on the accepted principle that all items are free from any obvious damage, fault or soiling except where stated. The term 'good' is noted as a guideline for this. NOTE: Should there be any cleaning, health and safety or other issues that need urgent attention, please call the Agent's office immediately."),
+            ("3.", "Description",
+             "Where the words 'gold', 'brass', 'oak', 'walnut' etc are used, it is understood that this is a description of the colour and type of the item and not the actual fabric, unless documentary evidence is available."),
+            ("4.", "Attendees",
+             "The Clerk must be alone in the property for the inventory inspection. The tenant / Landlord or a representative is welcome to briefly attend the inspection should they wish to do so."),
+            ("5.", "Fire Safety Equipment",
+             "If smoke detectors/carbon monoxide monitors are present and replacement batteries are required between maintenance visits or periodic tenancy checks, it is the Tenant's responsibility to replace and frequently check the working order of the same.")
+        ]
+
+        for i, (num, title, desc) in enumerate(disclaimer_rows[:5]):
+            cells = disclaimer_table.rows[i].cells
+            cells[0].text = title
+            cells[1].text = desc
+
+    elif report_type == 'full':
+        # FULL CHECK-IN REPORT FORMAT
+        title = doc.add_heading('Full Check-In Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add property address
+        address_para = doc.add_paragraph(address)
+        address_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Inspection Date: {inspection_date}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add prepared by
+        prepared_para = doc.add_paragraph(f"Prepared by: {on_behalf_of}")
+        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This full check-in report documents the complete condition of the property at the beginning of the tenancy and identifies any issues that require attention. Items marked with 'TR' indicate tenant responsibility.")
+
+    elif report_type == 'checkout':
+        # CHECK-OUT REPORT FORMAT
+        title = doc.add_heading('Check-Out Report', 0)
+        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add property address
+        address_para = doc.add_paragraph(address)
+        address_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add date
+        date_paragraph = doc.add_paragraph()
+        date_run = date_paragraph.add_run(f"Inspection Date: {inspection_date}")
+        date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add prepared by
+        prepared_para = doc.add_paragraph(f"Prepared by: {on_behalf_of}")
+        prepared_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Add introduction
+        doc.add_heading('Introduction', level=1)
+        doc.add_paragraph(
+            "This check-out report documents the condition of the property at the end of the tenancy and identifies any changes from the check-in report. Items marked with 'TR' indicate tenant responsibility.")
+
+    # Add page break after boilerplate
+    doc.add_page_break()
+
+    # Add footer with date to every page
+    # Note: This would require more complex handling with python-docx
+    # For now, we'll just add a placeholder at the bottom of each page
+    footer_para = doc.add_paragraph(f"Date of inspection: {inspection_date}")
+    footer_para.style = 'Footer'
+
+
+def generate_report_closing(doc, report_type, page_count):
+    """
+    Generate standardized closing content for different report types.
+
+    Args:
+        doc: The Document object to add content to
+        report_type: Type of report ('inventory', 'full', or 'checkout')
+        page_count: Total number of pages in the document (for declaration)
+    """
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    # Add a page break before closing sections
+    doc.add_page_break()
+
+    # Add closing content based on report type
+    if report_type in ['inventory', 'full']:
+        # Add tenant and landlord declaration section
+        doc.add_heading('TENANT DECLARATION', level=1)
+        doc.add_paragraph(
+            f"The items listed in all [x-pages] of this inventory/check in have been inspected and found to be in the condition indicated.")
+        doc.add_paragraph(
+            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
+
+        # Add signature fields
+        doc.add_paragraph("Name …………………………………………………………")
+        doc.add_paragraph("Signed for the Tenant ……………………………………………")
+
+        doc.add_heading('LANDLORD DECLARATION', level=1)
+        doc.add_paragraph(
+            f"The items listed in all 124 pages of this inventory/check in have been inspected and found to be in the condition indicated.")
+        doc.add_paragraph(
+            "I ………………………………………. being of sound mind have fully understood the implications of signing this document and verify that the content is correct and accurate at the time of signing and that the content will be binding if relied upon in a Court of Law.")
+
+        # Add signature fields
+        doc.add_paragraph("Name ……………………………………………………………")
+        doc.add_paragraph("Signed for the Landlord …………………………………………")
+
+    elif report_type == 'checkout':
+        # Add summary
+        doc.add_heading('Summary', level=1)
+        doc.add_paragraph(
+            "This check-out report provides a comprehensive overview of the property's condition at the end of the tenancy. Any discrepancies with the check-in report have been noted.")
+
+        # Add signatures for checkout
+        doc.add_heading('CHECKOUT CONFIRMATION', level=1)
+        doc.add_paragraph(
+            "This checkout report has been completed and represents the condition of the property at the end of the tenancy.")
+
+        # Add signature fields
+        doc.add_paragraph("Tenant Name: …………………………………………………………")
+        doc.add_paragraph("Tenant Signature: ……………………………………………")
+        doc.add_paragraph("Date: ……………………………………")
+
+        doc.add_paragraph("Agent/Landlord Name: …………………………………………………………")
+        doc.add_paragraph("Agent/Landlord Signature: ……………………………………………")
+        doc.add_paragraph("Date: ……………………………………")
+
+@application.route('/download_report/<filename>')
 def download_report(filename):
     """Serve the generated report for download"""
     return send_from_directory(RESULT_FOLDER, filename, as_attachment=True)
@@ -1067,15 +1960,388 @@ def generate_diff_html(original_text, comparison_text):
     return styled_html
 
 
-def generate_docx_report(csv_path):
+# Add these routes to your application.py file
+
+@application.route('/report_builder')
+@login_required
+def enhanced_report_builder():
+    """Render the enhanced report builder page"""
+    return render_template('report_builder.html')
+
+
+@application.route('/api/get_rooms')
+@login_required
+def get_rooms():
+    """API endpoint to get rooms from a CSV file"""
+    csv_id = request.args.get('csvId')
+
+    if not csv_id:
+        return jsonify({
+            'status': 'error',
+            'message': 'Missing csvId parameter'
+        })
+
+    # Find the CSV file
+    csv_path = None
+    if csv_id == 'latest':
+        # Find the most recent CSV file
+        transcript_dir = Path('/tmp/temp_transcripts')
+        if not transcript_dir.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'No transcript directory found'
+            })
+
+        csv_files = list(transcript_dir.glob('*.csv'))
+        if not csv_files:
+            return jsonify({
+                'status': 'error',
+                'message': 'No CSV files found'
+            })
+
+        # Sort by modification time, newest first
+        csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        csv_path = csv_files[0]
+    else:
+        # Find the specific CSV file
+        csv_path = UPLOAD_FOLDER / f"{csv_id}.csv"
+        if not csv_path.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'CSV file not found'
+            })
+
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_path)
+
+        # Extract unique room names (non-empty ones)
+        rooms = []
+        current_room = None
+
+        for _, row in df.iterrows():
+            room = row['Room'].strip() if pd.notna(row['Room']) and row['Room'].strip() else None
+            if room:
+                current_room = room
+                if current_room not in rooms:
+                    rooms.append(current_room)
+
+        return jsonify({
+            'status': 'success',
+            'rooms': rooms
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing CSV: {str(e)}'
+        })
+
+
+@application.route('/api/prepare_report', methods=['POST'])
+@login_required
+def prepare_report():
+    """API endpoint to prepare a report and get the intermediate page"""
+    report_type = request.form.get('reportType', 'full')
+    use_latest = request.form.get('useLatest') == 'true'
+
+    try:
+        csv_path = None
+        csv_id = None
+
+        if use_latest:
+            # Find the most recent CSV file
+            transcript_dir = Path('/tmp/temp_transcripts')
+            if not transcript_dir.exists():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No transcript directory found'
+                })
+
+            csv_files = list(transcript_dir.glob('*.csv'))
+            if not csv_files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV files found'
+                })
+
+            # Sort by modification time, newest first
+            csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            csv_path = csv_files[0]
+            csv_id = 'latest'
+        else:
+            if 'csv' not in request.files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV file provided'
+                })
+
+            csv_file = request.files['csv']
+            if csv_file.filename == '':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No file selected'
+                })
+
+            # Generate a unique ID for this CSV
+            csv_id = str(uuid.uuid4())
+
+            # Save uploaded file
+            csv_path = UPLOAD_FOLDER / f"{csv_id}.csv"
+            csv_file.save(csv_path)
+
+        # Redirect to the report builder with the CSV ID and report type
+        # Fixed URL to match your route name
+        return jsonify({
+            'status': 'success',
+            'redirectUrl': f'/report_builder?csvId={csv_id}&type={report_type}',
+            'message': 'CSV processed successfully'
+        })
+
+    except Exception as e:
+        # Clean up temporary file if it exists and was uploaded
+        if csv_path and not use_latest and csv_path.exists():
+            csv_path.unlink(missing_ok=True)
+
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing CSV: {str(e)}'
+        })
+
+
+@application.route('/api/generate_enhanced_report', methods=['POST'])
+@login_required
+def generate_enhanced_report():
+    """API endpoint to generate a final report with property details and room images"""
+    try:
+        # Get form data
+        report_type = request.form.get('reportType', 'full')
+        csv_id = request.form.get('csvId')
+        address = request.form.get('address')
+        inspection_date = request.form.get('inspectionDate')
+        on_behalf_of = request.form.get('onBehalfOf')
+
+        if not csv_id or not address or not inspection_date or not on_behalf_of:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required fields'
+            })
+
+        # Find the CSV file
+        csv_path = None
+        if csv_id == 'latest':
+            # Find the most recent CSV file
+            transcript_dir = Path('/tmp/temp_transcripts')
+            if not transcript_dir.exists():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No transcript directory found'
+                })
+
+            csv_files = list(transcript_dir.glob('*.csv'))
+            if not csv_files:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'No CSV files found'
+                })
+
+            # Sort by modification time, newest first
+            csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            csv_path = csv_files[0]
+        else:
+            # Find the specific CSV file
+            csv_path = UPLOAD_FOLDER / f"{csv_id}.csv"
+            if not csv_path.exists():
+                return jsonify({
+                    'status': 'error',
+                    'message': 'CSV file not found'
+                })
+
+        # Process uploaded images for each room
+        # Update the image processing in the generate_enhanced_report route
+        # Replace the image processing section with this code:
+
+        # Process uploaded images for each room
+        room_images = {}
+
+        # Debug: print all keys in request.files
+        logging.info(f"Form keys: {list(request.form.keys())}")
+        logging.info(f"File keys: {list(request.files.keys())}")
+
+        # Check for image files in the request
+        for key in request.files.keys():
+            if key.startswith('roomImages['):
+                # Extract room name from the input name format: roomImages[Room Name]
+                room_name = key[11:-1].lower()  # Extract what's between 'roomImages[' and ']'
+                logging.info(f"Processing images for room: {room_name}")
+
+                # Initialize room in the dictionary if needed
+                if room_name not in room_images:
+                    room_images[room_name] = []
+
+                # Get all files for this room
+                files = request.files.getlist(key)
+                logging.info(f"Number of files for {room_name}: {len(files)}")
+
+                # Save each image file
+                for file in files:
+                    if file and file.filename:
+                        # Generate a unique filename
+                        img_id = str(uuid.uuid4())
+                        img_ext = Path(secure_filename(file.filename)).suffix
+                        img_path = UPLOAD_FOLDER / f"{img_id}{img_ext}"
+
+                        # Save the image
+                        file.save(img_path)
+                        room_images[room_name].append(str(img_path))
+
+                        # Log the save
+                        logging.info(f"Saved image for {room_name}: {img_path} (from {file.filename})")
+
+        # Debug log the final image count per room
+        for room, images in room_images.items():
+            logging.info(f"Room {room}: {len(images)} images collected")
+
+        # Generate the enhanced report
+        result_path = generate_enhanced_docx_report(
+            csv_path,
+            report_type,
+            address,
+            inspection_date,
+            on_behalf_of,
+            room_images
+        )
+
+        # Create a filename based on address and date
+        formatted_date = datetime.strptime(inspection_date, '%Y-%m-%d').strftime('%d-%m-%Y')
+        report_name = f"{address.replace(' ', '_')}_{formatted_date}_{report_type}_report.docx"
+
+        return jsonify({
+            'status': 'success',
+            'reportUrl': f"/download_report/{result_path.name}",
+            'reportName': report_name,
+            'message': f'{report_type.capitalize()} report generated successfully'
+        })
+
+    except Exception as e:
+        logging.error(f"Error generating report: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'Error generating report: {str(e)}'
+        })
+
+
+@application.route('/api/get_csv_rooms')
+@login_required
+def get_csv_rooms():
+    """API endpoint to get rooms from a CSV file"""
+    csv_id = request.args.get('csvId')
+
+    if not csv_id:
+        return jsonify({
+            'status': 'error',
+            'message': 'Missing csvId parameter'
+        })
+
+    # Find the CSV file
+    csv_path = None
+    if csv_id == 'latest':
+        # Find the most recent CSV file
+        transcript_dir = Path('/tmp/temp_transcripts')
+        if not transcript_dir.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'No transcript directory found'
+            })
+
+        csv_files = list(transcript_dir.glob('*.csv'))
+        if not csv_files:
+            return jsonify({
+                'status': 'error',
+                'message': 'No CSV files found'
+            })
+
+        # Sort by modification time, newest first
+        csv_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        csv_path = csv_files[0]
+    else:
+        # Find the specific CSV file - try both locations
+        csv_path_upload = UPLOAD_FOLDER / f"{csv_id}.csv"
+        csv_path_transcript = TRANSCRIPT_FOLDER / f"{csv_id}.csv"
+
+        if csv_path_upload.exists():
+            csv_path = csv_path_upload
+        elif csv_path_transcript.exists():
+            csv_path = csv_path_transcript
+        else:
+            # Try to see if the full filename was passed
+            for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER]:
+                potential_path = folder / csv_id
+                if potential_path.exists():
+                    csv_path = potential_path
+                    break
+
+            if not csv_path:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'CSV file not found'
+                })
+
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_path)
+
+        # Extract unique room names (non-empty ones)
+        rooms = []
+        current_room = None
+
+        for _, row in df.iterrows():
+            room_col = 'Room' if 'Room' in df.columns else None
+            if not room_col:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Room column not found in CSV'
+                })
+
+            room = row[room_col].strip() if pd.notna(row[room_col]) and row[room_col].strip() else None
+            if room:
+                current_room = room
+                if current_room not in rooms:
+                    rooms.append(current_room)
+
+        # Convert room names to lowercase for consistency
+        rooms = [room.lower() for room in rooms]
+
+        return jsonify({
+            'status': 'success',
+            'rooms': rooms
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error processing CSV: {str(e)}'
+        })
+
+def generate_enhanced_docx_report(csv_path, report_type, address, inspection_date, on_behalf_of, room_images):
     """
-    Generate a formatted Word document from CSV data
+    Generate an enhanced report with property details and room images
+
+    Args:
+        csv_path: Path to the CSV file
+        report_type: Type of report to generate ('inventory', 'full', or 'checkout')
+        address: Property address
+        inspection_date: Date of inspection
+        on_behalf_of: Prepared on behalf of
+        room_images: Dictionary mapping room names to lists of image paths
+
+    Returns:
+        Path to the generated report
     """
     import pandas as pd
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from datetime import datetime  # Add this import inside the function as well for extra safety
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from datetime import datetime
 
     # Read CSV data
     df = pd.read_csv(csv_path)
@@ -1087,82 +2353,220 @@ def generate_docx_report(csv_path):
     doc.core_properties.title = "Property Inspection Report"
     doc.core_properties.author = "PhillyScript"
 
-    # Add a title
-    title = doc.add_heading('Property Inspection Report', 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Format the inspection date
+    try:
+        # Parse the date from the form (YYYY-MM-DD)
+        inspection_date_obj = datetime.strptime(inspection_date, '%Y-%m-%d')
+        # Format as Month Day, Year
+        formatted_date = inspection_date_obj.strftime('%B %d, %Y')
+    except:
+        # Fallback to the provided string if parsing fails
+        formatted_date = inspection_date
 
-    # Add date
-    date_paragraph = doc.add_paragraph()
-    date_run = date_paragraph.add_run(f"Generated on: {datetime.now().strftime('%B %d, %Y')}")
-    date_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # REPLACE ALL THIS BOILERPLATE CODE:
+    # if report_type == 'inventory':
+    #     # INVENTORY CHECK-IN REPORT FORMAT
+    #     title = doc.add_heading('INVENTORY', 0)
+    #     ...
+    # WITH THIS SINGLE LINE:
+    generate_report_boilerplate(doc, report_type, address, formatted_date, on_behalf_of)
 
-    # Add a line break
-    doc.add_paragraph()
+    # Group the data by room - using a simple approach to handle empty room cells
+    room_data = {}
+    current_room = None
 
-    # Add an introduction
-    doc.add_heading('Introduction', level=1)
-    intro_text = ("This report documents the condition of the property and identifies any issues "
-                  "that require attention. Items marked with 'TR' indicate tenant responsibility.")
-    doc.add_paragraph(intro_text)
+    # First pass - group rows by room
+    for _, row in df.iterrows():
+        room = row['Room'].strip() if pd.notna(row['Room']) and row['Room'].strip() else None
 
-    # Add a line break
-    doc.add_paragraph()
+        if room:
+            current_room = room
 
-    # Add section for features and comments
-    doc.add_heading('Inspection Details', level=1)
+        if current_room not in room_data:
+            room_data[current_room] = []
 
-    # Track current feature for grouping comments
-    current_feature = None
+        room_data[current_room].append(row)
 
-    # Process each row in the CSV
-    for index, row in df.iterrows():
-        feature = row['Feature'].strip() if 'Feature' in row and pd.notna(row['Feature']) and row[
-            'Feature'].strip() else None
-        comment = row['Comment'].strip() if 'Comment' in row and pd.notna(row['Comment']) else ""
+    # Update the room processing in generate_enhanced_docx_report function
+    # This restructures how we add room content to ensure images come at the end
 
-        # Check for tenant responsibility
-        is_tenant_responsibility = False
-        if 'Tenant Responsibility (TR)' in row and pd.notna(row['Tenant Responsibility (TR)']):
-            is_tenant_responsibility = bool(row['Tenant Responsibility (TR)'])
+    # Second pass - process each room group
+    first_room = True
+    room_counter = 1  # Counter for room numbering
 
-        # If this is a new feature, add a subheading
-        if feature and feature != " ":
-            current_feature = feature
-            doc.add_heading(feature, level=2)
+    for room, rows in room_data.items():
+        if room is None:
+            continue  # Skip rows with no room (should be rare/nonexistent)
 
-        # Add the comment as a paragraph
-        if comment:
-            p = doc.add_paragraph()
-            p.style = 'List Bullet'
-            comment_run = p.add_run(comment)
+        # Add a page break except for the first room
+        if not first_room:
+            doc.add_page_break()
+        first_room = False
 
-            # If tenant responsibility, add indicator and style
-            if is_tenant_responsibility:
-                tr_run = p.add_run(" [TR]")
-                tr_run.bold = True
-                tr_run.font.color.rgb = RGBColor(255, 0, 0)  # Red color
+        # Add room heading with number
+        numbered_room_heading = f"{room_counter}. {room}"
+        room_heading = doc.add_heading(numbered_room_heading, level=1)
+        room_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    # Add summary section
-    doc.add_heading('Summary', level=1)
-    doc.add_paragraph("This report provides a comprehensive overview of the property's condition. "
-                      "Please address any issues identified in this report promptly.")
+        # Create a table for this room's inventory items
+        # Columns: Attribute, Feature, Comment, Tenant Responsibility (TR)
+        table = doc.add_table(rows=1, cols=4)
+        table.style = 'Table Grid'
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # Save the document
+        # Set the header row
+        header_cells = table.rows[0].cells
+        header_cells[0].text = 'Attribute'
+        header_cells[1].text = 'Feature'
+        header_cells[2].text = 'Comment'
+        header_cells[3].text = 'Tenant Responsibility (TR)'
+
+        # Apply header formatting
+        for cell in header_cells:
+            cell_para = cell.paragraphs[0]
+            cell_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in cell_para.runs:
+                run.bold = True
+
+        # Add the data rows for this room
+        # Track attributes to add numbering
+        attribute_counter = 1
+        current_attribute = None
+
+        for row_data in rows:
+            # Get attribute value
+            attribute = row_data['Attribute'] if pd.notna(row_data['Attribute']) else ''
+
+            # Update attribute numbering if this is a new attribute
+            if attribute and attribute != current_attribute:
+                current_attribute = attribute
+                numbered_attribute = f"{room_counter}.{attribute_counter} {attribute}"
+                attribute_counter += 1
+            else:
+                # Empty string if this row doesn't have an attribute (continuing from previous)
+                numbered_attribute = ''
+
+            # Add a new row to the table
+            new_row = table.add_row().cells
+
+            # Fill in the cells
+            new_row[0].text = numbered_attribute
+            new_row[1].text = row_data['Feature'] if pd.notna(row_data['Feature']) else ''
+            new_row[2].text = row_data['Comment'] if pd.notna(row_data['Comment']) else ''
+            new_row[3].text = row_data['Tenant Responsibility (TR)'] if pd.notna(
+                row_data['Tenant Responsibility (TR)']) else ''
+
+            # Center align the TR column
+            if new_row[3].text:
+                new_row[3].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # NOW add room images AFTER the inventory table - this ensures they appear at the end of the room section
+        # This is the key change from the previous version
+        room_lower = room.lower() if isinstance(room, str) else ""
+        logging.info(f"Looking for images for room: {room_lower}")
+        logging.info(f"Available room keys in room_images: {list(room_images.keys())}")
+
+        if room_lower in room_images and room_images[room_lower]:
+            image_count = len(room_images[room_lower])
+            logging.info(f"Found {image_count} images for room: {room_lower}")
+
+            # Add images heading if we have images
+            if image_count > 0:
+                img_heading = doc.add_heading('Room Images', level=2)
+
+            # Add each image in sequence
+            for i, img_path in enumerate(room_images[room_lower]):
+                logging.info(f"Adding image {i + 1}: {img_path}")
+                try:
+                    # Create a paragraph for the image
+                    p = doc.add_paragraph()
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+                    # Verify the image path exists
+                    if not os.path.exists(img_path):
+                        logging.error(f"Image file not found: {img_path}")
+                        p.add_run(f"[Image {i + 1} file not found]")
+                        continue
+
+                    # Log image file details
+                    file_size = os.path.getsize(img_path)
+                    logging.info(f"Image file size: {file_size} bytes")
+
+                    # Add the image to the paragraph
+                    run = p.add_run()
+                    run.add_picture(img_path, width=Inches(5.0))  # Standard width
+
+                    # Add caption
+                    caption = doc.add_paragraph(f"Image {i + 1}")
+                    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    caption.style = 'Caption'
+
+                    # Add some space
+                    doc.add_paragraph()
+
+                    logging.info(f"Successfully added image {i + 1}")
+
+                except Exception as e:
+                    # If adding the image fails, add a placeholder text
+                    error_p = doc.add_paragraph(f"[Image {i + 1} could not be displayed: {str(e)}]")
+                    error_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    logging.error(f"Error adding image to report: {str(e)}", exc_info=True)
+
+                    # Add space even if the image fails
+                    doc.add_paragraph()
+        else:
+            logging.info(f"No images found for room: {room_lower}")
+
+        # Increment room counter for the next room
+        room_counter += 1
+
+    # REPLACE ALL THIS CLOSING CODE:
+    # # Add a page break before closing sections
+    # doc.add_page_break()
+    #
+    # # Add closing content based on report type
+    # if report_type == 'inventory':
+    #     # Add tenant and landlord declaration section
+    #     ...
+    # WITH THIS SINGLE LINE:
+    generate_report_closing(doc, report_type, 124)  # 124 is a placeholder for page count
+
+    # Save the document with report type in the filename
     result_id = str(uuid.uuid4())
-    result_path = RESULT_FOLDER / f"{result_id}_inspection_report.docx"
+    filename = f"{result_id}_{report_type}_report.docx"
+    result_path = RESULT_FOLDER / filename
     doc.save(result_path)
 
+    # Clean up temporary image files
+    for room_img_list in room_images.values():
+        for img_path in room_img_list:
+            try:
+                Path(img_path).unlink(missing_ok=True)
+            except:
+                pass
+
     return result_path
+
+@application.errorhandler(Exception)
+def handle_error(e):
+    logger.error(f"Unhandled exception: {str(e)}")
+    return jsonify({
+        'error': 'Internal server error',
+        'message': str(e)
+    }), 500
 
 if __name__ == '__main__':
     # Determine optimal number of threads
     num_threads = min(multiprocessing.cpu_count() * 2, 8)  # Use 2x CPU cores, max 8
 
-    print(f"Starting PhillyScript server with {num_threads} worker threads...")
+    # Get port from environment or use 8080 as default for App Runner
+    port = int(os.environ.get('PORT', 5001))
+
+    print(f"Starting PhillyScript server with {num_threads} worker threads on port {port}...")
     print("Available routes:")
-    print("  - http://127.0.0.1:5001/ (main interface)")
-    print("  - http://127.0.0.1:5001/transcribe (transcription page)")
-    print("  - http://127.0.0.1:5001/diff_check (image comparison)")
+    print(f"  - http://127.0.0.1:{port}/ (main interface)")
+    print(f"  - http://127.0.0.1:{port}/transcribe (transcription page)")
+    print(f"  - http://127.0.0.1:{port}/diff_check (image comparison)")
 
     # Set threaded mode and optimal worker count
-    app.run(debug=True, host='0.0.0.0', port=5001, threaded=True)
+    application.run(debug=False, host='0.0.0.0', port=port, threaded=True)

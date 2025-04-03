@@ -497,6 +497,13 @@ def format_text(text):
 
     return formatted_text
 
+def debug_raw_transcript(audio_path):
+    """Debug function to show raw transcription before any processing."""
+    transcript = transcribe_audio_optimized(audio_path)
+    print("\n--- RAW TRANSCRIPT ---")
+    print(transcript)
+    print("--- END RAW TRANSCRIPT ---\n")
+    return transcript
 
 def correct_transcript_with_gpt(transcript):
     """
@@ -667,24 +674,26 @@ def post_process_existing_csv(csv_path):
     """Apply GPT correction to an existing CSV file."""
     return correct_csv_with_gpt(csv_path)
 
+
 def process_transcript(transcript):
     """
-    Debug version of process_transcript function with extra logging.
+    Process transcript text to extract room, attribute, features and comments.
+    With additional debugging to ensure comments are captured.
     """
-    print("\nProcessing transcript with debug...")
-    logging.info(f"DEBUG: Processing transcript: {transcript}")
+    print("\nProcessing transcript...")
+    print(f"Raw transcript (first 200 chars): {transcript[:200]}...")
     results = []
 
     # Initialize current state
     current_room = ""
     current_attribute = ""
     current_feature = ""
-    current_mode = None  # Tracks what we're currently collecting (room, attribute, feature, or comment)
+    current_mode = None
 
-    # Track what we've already written to output
-    written_room = None
-    written_attribute = None
-    written_feature = None
+    # Track already written fields for hierarchical display
+    written_rooms = set()
+    written_attributes = set()  # Track per room
+    written_features = set()  # Track per attribute
 
     # Valid attributes list
     valid_attributes = [
@@ -692,36 +701,59 @@ def process_transcript(transcript):
         "cornicing", "ceilings", "fixtures and fittings", "furniture"
     ]
 
-    # Split transcript into words for easier processing
+    # Split transcript into words and print for debugging
     words = transcript.split()
-    logging.info(f"DEBUG: Word count: {len(words)}")
-    logging.info(f"DEBUG: Words: {words}")
+    print(f"Transcript contains {len(words)} words")
+
+    # Count occurrences of key markers for debugging
+    markers = {
+        "new room": transcript.lower().count("new room"),
+        "new attribute": transcript.lower().count("new attribute"),
+        "new feature": transcript.lower().count("new feature"),
+        "comment": transcript.lower().count("comment")
+    }
+    print(f"Key markers found: {markers}")
 
     i = 0
-    buffer = ""  # To collect text between markers
+    buffer = ""
+    comment_count = 0
 
     while i < len(words):
-        # Detect markers that indicate a mode change
-        if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "room":
-            logging.info(f"DEBUG: Found 'new room' marker at position {i}")
-            # Save any previous data before changing modes
-            if current_mode == "comment" and buffer and current_feature:
-                # Check for "Tenant Responsibility" in the comment
-                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+        # Print current position and context periodically for debugging
+        if i % 50 == 0:
+            context = " ".join(words[max(0, i - 5):min(len(words), i + 5)])
+            print(f"Position {i}/{len(words)}, Context: '...{context}...'")
 
-                # Apply text formatting to the comment
+        # Handle "new room"
+        if i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "room":
+            print(f"Found 'new room' at position {i}")
+
+            # Save pending comment if any
+            if current_mode == "comment" and buffer and current_feature:
+                comment_count += 1
+                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
                 comment_text = format_text(buffer.strip())
 
-                # Determine which fields to include in this row
-                output_room = current_room if written_room != current_room else ""
-                output_attribute = current_attribute if written_attribute != current_attribute else ""
-                output_feature = current_feature if written_feature != current_feature else ""
+                print(f"Saving comment from buffer before new room: '{comment_text[:50]}...'")
 
-                # Update tracking of written fields
-                written_room = current_room
-                written_attribute = current_attribute
-                written_feature = current_feature
+                # For hierarchical display: room appears only if not seen before
+                output_room = current_room if current_room not in written_rooms else ""
+                if current_room not in written_rooms:
+                    written_rooms.add(current_room)
 
+                # For attribute hierarchical display
+                room_attr_key = f"{current_room}:{current_attribute}"
+                output_attribute = current_attribute if room_attr_key not in written_attributes else ""
+                if room_attr_key not in written_attributes:
+                    written_attributes.add(room_attr_key)
+
+                # For feature hierarchical display
+                attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
+                output_feature = current_feature if attr_feature_key not in written_features else ""
+                if attr_feature_key not in written_features:
+                    written_features.add(attr_feature_key)
+
+                # Add the comment as a new row
                 results.append({
                     "Room": output_room,
                     "Attribute": output_attribute,
@@ -729,96 +761,107 @@ def process_transcript(transcript):
                     "Comment": comment_text,
                     "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
                 })
-                print(f"Added comment: {comment_text}")
+                print(f"Added comment #{comment_count}: {comment_text[:50]}...")
                 buffer = ""
 
-            # Change to room collection mode
+            # Move to room collection
             current_mode = "room"
-            buffer = ""  # Reset buffer for new room
-            # Reset tracking for written values when room changes
-            written_room = None
-            written_attribute = None
-            written_feature = None
-            i += 2  # Skip "new room"
+            buffer = ""
+
+            # Reset tracking for hierarchical display since we're starting a new room
+            written_attributes = set()
+            written_features = set()
+
+            i += 2
             continue
 
-        elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "attribute":
-            logging.info(f"DEBUG: Found 'new attribute' marker at position {i}")
-            # Save room data if changing from room mode
+        # Handle "new attribute"
+        elif i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "attribute":
+            print(f"Found 'new attribute' at position {i}")
+
+            # Save room data
             if current_mode == "room" and buffer:
-                # Remove any periods from the end of the room name
                 cleaned_buffer = buffer.strip()
                 if cleaned_buffer.endswith('.'):
                     cleaned_buffer = cleaned_buffer[:-1]
                 current_room = cleaned_buffer
                 print(f"Set current room to: {current_room}")
 
-            # Change to attribute collection mode
+            # Move to attribute collection
             current_mode = "attribute"
-            buffer = ""  # Reset buffer for new attribute
-            # Reset tracking for written attribute and feature when attribute changes
-            written_attribute = None
-            written_feature = None
-            i += 2  # Skip "new attribute"
+            buffer = ""
+
+            # Reset feature tracking for this new attribute
+            written_features = set()
+
+            i += 2
             continue
 
-        elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
-            logging.info(f"DEBUG: Found 'new feature' marker at position {i}")
-            # Save attribute data if changing from attribute mode
+        # Handle "new feature"
+        elif i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "feature":
+            print(f"Found 'new feature' at position {i}")
+
+            # Save attribute data
             if current_mode == "attribute" and buffer:
-                # Normalize and validate attribute
                 cleaned_buffer = buffer.strip()
                 if cleaned_buffer.endswith('.'):
                     cleaned_buffer = cleaned_buffer[:-1]
                 normalized_buffer = cleaned_buffer.lower()
 
                 if any(attr == normalized_buffer for attr in valid_attributes):
-                    current_attribute = normalized_buffer.title()  # Capitalize properly
+                    current_attribute = normalized_buffer.title()
                     print(f"Set current attribute to: {current_attribute}")
                 else:
                     closest_match = min(valid_attributes, key=lambda x:
                     sum(1 for a, b in zip(x, normalized_buffer) if a != b))
-                    current_attribute = closest_match.title()  # Use closest match
+                    current_attribute = closest_match.title()
                     print(f"Invalid attribute '{normalized_buffer}', using closest match: {current_attribute}")
 
-            # Change to feature collection mode
+            # Move to feature collection
             current_mode = "feature"
-            buffer = ""  # Reset buffer for new feature
-            # Reset tracking for written feature when feature changes
-            written_feature = None
-            i += 2  # Skip "new feature"
+            buffer = ""
+            i += 2
             continue
 
-        elif words[i] == "comment":
-            logging.info(f"DEBUG: Found 'comment' marker at position {i}")
-            # Save feature data if changing from feature mode
+        # Handle "comment" - THE KEY PART FOR FIXING MULTIPLE COMMENTS
+        elif words[i].lower() == "comment":
+            print(f"Found 'comment' at position {i}")
+
+            # Save feature data if coming from feature mode
             if current_mode == "feature" and buffer:
-                # Remove any periods from the end of the feature name
                 cleaned_buffer = buffer.strip()
                 if cleaned_buffer.endswith('.'):
                     cleaned_buffer = cleaned_buffer[:-1]
                 current_feature = cleaned_buffer
                 print(f"Set current feature to: {current_feature}")
 
-            # If we're already in comment mode, this means it's a new comment
-            # Save the previous comment first
+            # CRITICAL: If we're already in comment mode, save the previous comment
+            # as a separate row BEFORE starting to collect the new comment
             if current_mode == "comment" and buffer and current_feature:
-                # Check for "Tenant Responsibility" in the comment
+                comment_count += 1
                 is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+                comment_text = format_text(buffer.strip()) if callable(format_text) else buffer.strip()
 
-                # Apply text formatting to the comment
-                comment_text = format_text(buffer.strip())
+                print(f"Saving comment from buffer before new comment: '{comment_text[:50]}...'")
 
-                # Determine which fields to include in this row
-                output_room = current_room if written_room != current_room else ""
-                output_attribute = current_attribute if written_attribute != current_attribute else ""
-                output_feature = current_feature if written_feature != current_feature else ""
+                # For hierarchical display: room appears only if not seen before
+                output_room = current_room if current_room not in written_rooms else ""
+                if current_room not in written_rooms:
+                    written_rooms.add(current_room)
 
-                # Update tracking of written fields
-                written_room = current_room
-                written_attribute = current_attribute
-                written_feature = current_feature
+                # For attribute hierarchical display
+                room_attr_key = f"{current_room}:{current_attribute}"
+                output_attribute = current_attribute if room_attr_key not in written_attributes else ""
+                if room_attr_key not in written_attributes:
+                    written_attributes.add(room_attr_key)
 
+                # For feature hierarchical display
+                attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
+                output_feature = current_feature if attr_feature_key not in written_features else ""
+                if attr_feature_key not in written_features:
+                    written_features.add(attr_feature_key)
+
+                # Add this comment as a separate row
                 results.append({
                     "Room": output_room,
                     "Attribute": output_attribute,
@@ -826,34 +869,45 @@ def process_transcript(transcript):
                     "Comment": comment_text,
                     "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
                 })
-                print(f"Added comment: {comment_text}")
+                print(f"Added comment #{comment_count}: {comment_text[:50]}...")
 
-            # Change to comment collection mode
+            # Reset for new comment
             current_mode = "comment"
-            buffer = ""  # Reset buffer for new comment
-            i += 1  # Skip "comment"
+            buffer = ""
+            i += 1
             continue
 
-        # Add current word to the buffer if we're in a collection mode
+        # Add word to buffer
         if current_mode:
             buffer += words[i] + " "
-            logging.info(f"DEBUG: Added '{words[i]}' to buffer. Current buffer: '{buffer}'")
 
         # Move to next word
         i += 1
 
-    # Handle any remaining data in the buffer
+    # Handle final pending comment
     if current_mode == "comment" and buffer and current_feature:
-        # Check for "Tenant Responsibility" in the comment
+        comment_count += 1
         is_tenant_responsibility = "tenant responsibility" in buffer.lower()
+        comment_text = format_text(buffer.strip()) if callable(format_text) else buffer.strip()
 
-        # Apply text formatting to the comment
-        comment_text = format_text(buffer.strip())
+        print(f"Saving final comment from buffer: '{comment_text[:50]}...'")
 
-        # Determine which fields to include in this row
-        output_room = current_room if written_room != current_room else ""
-        output_attribute = current_attribute if written_attribute != current_attribute else ""
-        output_feature = current_feature if written_feature != current_feature else ""
+        # For hierarchical display: room appears only if not seen before
+        output_room = current_room if current_room not in written_rooms else ""
+        if current_room not in written_rooms:
+            written_rooms.add(current_room)
+
+        # For attribute hierarchical display
+        room_attr_key = f"{current_room}:{current_attribute}"
+        output_attribute = current_attribute if room_attr_key not in written_attributes else ""
+        if room_attr_key not in written_attributes:
+            written_attributes.add(room_attr_key)
+
+        # For feature hierarchical display
+        attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
+        output_feature = current_feature if attr_feature_key not in written_features else ""
+        if attr_feature_key not in written_features:
+            written_features.add(attr_feature_key)
 
         results.append({
             "Room": output_room,
@@ -862,15 +916,23 @@ def process_transcript(transcript):
             "Comment": comment_text,
             "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
         })
-        print(f"Added final comment: {comment_text}")
+        print(f"Added final comment #{comment_count}: {comment_text[:50]}...")
 
     print(f"\nProcessed {len(results)} entries")
-    logging.info(f"DEBUG: Processed {len(results)} entries. Results: {results}")
+    print(f"Total comments found: {comment_count}")
+
+    # Last sanity check - just in case format_text is failing
+    for i, result in enumerate(results):
+        if not result["Comment"] and "comment" in result:
+            # Possible fallback if the "Comment" field is empty but a comment exists
+            results[i]["Comment"] = result.get("comment", "")
+            print(f"Fixed missing Comment in row {i}")
+
     return results
 
 
 def process_audio_file(file_path, original_filename):
-    """Process audio file with enhanced GPT correction."""
+    """Process audio file with enhanced GPT correction and proper multi-comment handling."""
     # Get original transcription using your existing method
     transcript = transcribe_audio_optimized(file_path)
 
@@ -880,13 +942,23 @@ def process_audio_file(file_path, original_filename):
     # Apply GPT correction to the full transcript before processing
     corrected_transcript = correct_transcript_with_gpt(transcript)
 
-    # Process the corrected transcript using the debug function
-    results = process_transcript_debug(corrected_transcript)
+    # Log the original and corrected transcripts for debugging
+    print(f"Original transcript: {transcript[:200]}...")
+    print(f"Corrected transcript: {corrected_transcript[:200]}...")
+
+    # Process the corrected transcript using your existing function
+    results = process_transcript(corrected_transcript)
 
     if not results:
         return None, "No features found in the transcript"
 
-    # Create DataFrame
+    # Log the results before DataFrame conversion for debugging
+    print(f"Results from process_transcript: {len(results)} entries")
+    for i, entry in enumerate(results):
+        print(f"Entry {i}: Room='{entry.get('Room', '')}', Attr='{entry.get('Attribute', '')}', "
+              f"Feature='{entry.get('Feature', '')}', Comment='{entry.get('Comment', '')}'")
+
+    # Create DataFrame - MAKE SURE TO CAPTURE ALL COLUMNS
     df = pd.DataFrame(results)
 
     # Generate output filename based on input audio filename
@@ -894,8 +966,29 @@ def process_audio_file(file_path, original_filename):
     output_filename = f"{base_filename}_transcript.csv"
     output_path = TRANSCRIPT_FOLDER / output_filename
 
-    # Save to CSV
+    # Save to CSV - ENSURE THAT ALL COLUMNS ARE SAVED
     df.to_csv(output_path, index=False)
+
+    # Log the DataFrame before saving to verify content
+    print(f"DataFrame shape before saving: {df.shape}")
+    print(f"DataFrame columns: {df.columns.tolist()}")
+
+    # Check if comments are present in the DataFrame
+    comment_count = df['Comment'].count()
+    print(f"Comment count in DataFrame: {comment_count}")
+
+    # Check if there are any missing comments
+    if comment_count < len(results):
+        print("WARNING: Some comments may be missing from the DataFrame!")
+
+    # Double-check the saved CSV file
+    try:
+        saved_df = pd.read_csv(output_path)
+        print(f"Saved CSV shape: {saved_df.shape}")
+        print(f"Saved CSV columns: {saved_df.columns.tolist()}")
+        print(f"Comment count in saved CSV: {saved_df['Comment'].count()}")
+    except Exception as e:
+        print(f"Error verifying saved CSV: {str(e)}")
 
     return output_path, None
 
@@ -2466,11 +2559,14 @@ if __name__ == '__main__':
     # Determine optimal number of threads
     num_threads = min(multiprocessing.cpu_count() * 2, 8)  # Use 2x CPU cores, max 8
 
-    print(f"Starting PhillyScript server with {num_threads} worker threads...")
+    # Get port from environment or use 8080 as default for App Runner
+    port = int(os.environ.get('PORT', 8080))
+
+    print(f"Starting PhillyScript server with {num_threads} worker threads on port {port}...")
     print("Available routes:")
-    print("  - http://127.0.0.1:5001/ (main interface)")
-    print("  - http://127.0.0.1:5001/transcribe (transcription page)")
-    print("  - http://127.0.0.1:5001/diff_check (image comparison)")
+    print(f"  - http://127.0.0.1:{port}/ (main interface)")
+    print(f"  - http://127.0.0.1:{port}/transcribe (transcription page)")
+    print(f"  - http://127.0.0.1:{port}/diff_check (image comparison)")
 
     # Set threaded mode and optimal worker count
-    application.run(debug=True, host='0.0.0.0', port=5001, threaded=True)
+    application.run(debug=False, host='0.0.0.0', port=port, threaded=True)

@@ -12,3 +12,4 @@ Flask-SQLAlchemy==2.5.1
 SQLAlchemy==1.4.46
 psycopg2-binary==2.9.3
 boto3==1.28.0
+openai>=1.0.0
