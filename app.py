@@ -637,38 +637,6 @@ def correct_csv_with_gpt(csv_path):
         return csv_path
 
 
-# Modify your existing process_audio_file function to incorporate GPT correction
-def enhanced_process_audio_file(file_path, original_filename):
-    """Process audio file with enhanced GPT correction."""
-    # Get original transcription using your existing method
-    transcript = transcribe_audio_optimized(file_path)
-
-    if not transcript:
-        return None, "Failed to transcribe audio"
-
-    # Apply GPT correction to the full transcript before processing
-    corrected_transcript = correct_transcript_with_gpt(transcript)
-
-    # Process the corrected transcript using your existing function
-    results = process_transcript(corrected_transcript)
-
-    if not results:
-        return None, "No features found in the transcript"
-
-    # Create DataFrame
-    df = pd.DataFrame(results)
-
-    # Generate output filename based on input audio filename
-    base_filename = Path(original_filename).stem
-    output_filename = f"{base_filename}_transcript.csv"
-    output_path = TRANSCRIPT_FOLDER / output_filename
-
-    # Save to CSV
-    df.to_csv(output_path, index=False)
-
-    return output_path, None
-
-
 # Alternative approach: Post-process existing CSVs
 def post_process_existing_csv(csv_path):
     """Apply GPT correction to an existing CSV file."""
@@ -677,318 +645,197 @@ def post_process_existing_csv(csv_path):
 
 def process_transcript(transcript):
     """
-    Process transcript text to extract room, attribute, features and comments.
-    With additional debugging to ensure comments are captured.
+    Process transcript text following exact hierarchical rules:
+    * New Room → new row with room, first attribute, first feature, first comment
+    * New Attribute → new row with attribute, first feature, first comment
+    * New Feature → new row with feature, first comment
+    * New Comment → new row with just the comment
     """
     print("\nProcessing transcript...")
-    print(f"Raw transcript (first 200 chars): {transcript[:200]}...")
     results = []
 
-    # Initialize current state
+    # Split transcript into lines for cleaner processing
+    lines = transcript.strip().split('\n')
+    lines = [line.strip() for line in lines if line.strip()]
+
     current_room = ""
     current_attribute = ""
     current_feature = ""
-    current_mode = None
-
-    # Track already written fields for hierarchical display
-    written_rooms = set()
-    written_attributes = set()  # Track per room
-    written_features = set()  # Track per attribute
-
-    # Valid attributes list
-    valid_attributes = [
-        "doors", "floors", "skirting boards", "walls",
-        "cornicing", "ceilings", "fixtures and fittings", "furniture"
-    ]
-
-    # Split transcript into words and print for debugging
-    words = transcript.split()
-    print(f"Transcript contains {len(words)} words")
-
-    # Count occurrences of key markers for debugging
-    markers = {
-        "new room": transcript.lower().count("new room"),
-        "new attribute": transcript.lower().count("new attribute"),
-        "new feature": transcript.lower().count("new feature"),
-        "comment": transcript.lower().count("comment")
+    pending_row = {
+        "Room": "",
+        "Attribute": "",
+        "Feature": "",
+        "Comment": "",
+        "Tenant Responsibility (TR)": ""
     }
-    print(f"Key markers found: {markers}")
 
-    i = 0
-    buffer = ""
-    comment_count = 0
+    # Process each line
+    for line in lines:
+        line = line.strip()
 
-    while i < len(words):
-        # Print current position and context periodically for debugging
-        if i % 50 == 0:
-            context = " ".join(words[max(0, i - 5):min(len(words), i + 5)])
-            print(f"Position {i}/{len(words)}, Context: '...{context}...'")
+        # Skip empty lines
+        if not line:
+            continue
+
+        lower_line = line.lower()
 
         # Handle "new room"
-        if i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "room":
-            print(f"Found 'new room' at position {i}")
+        if lower_line.startswith("new room"):
+            # Add any pending row first
+            if any(pending_row.values()):
+                results.append(pending_row.copy())
 
-            # Save pending comment if any
-            if current_mode == "comment" and buffer and current_feature:
-                comment_count += 1
-                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
-                comment_text = format_text(buffer.strip())
-
-                print(f"Saving comment from buffer before new room: '{comment_text[:50]}...'")
-
-                # For hierarchical display: room appears only if not seen before
-                output_room = current_room if current_room not in written_rooms else ""
-                if current_room not in written_rooms:
-                    written_rooms.add(current_room)
-
-                # For attribute hierarchical display
-                room_attr_key = f"{current_room}:{current_attribute}"
-                output_attribute = current_attribute if room_attr_key not in written_attributes else ""
-                if room_attr_key not in written_attributes:
-                    written_attributes.add(room_attr_key)
-
-                # For feature hierarchical display
-                attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
-                output_feature = current_feature if attr_feature_key not in written_features else ""
-                if attr_feature_key not in written_features:
-                    written_features.add(attr_feature_key)
-
-                # Add the comment as a new row
-                results.append({
-                    "Room": output_room,
-                    "Attribute": output_attribute,
-                    "Feature": output_feature,
-                    "Comment": comment_text,
-                    "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
-                })
-                print(f"Added comment #{comment_count}: {comment_text[:50]}...")
-                buffer = ""
-
-            # Move to room collection
-            current_mode = "room"
-            buffer = ""
-
-            # Reset tracking for hierarchical display since we're starting a new room
-            written_attributes = set()
-            written_features = set()
-
-            i += 2
-            continue
+            # Start a new row with this room
+            current_room = line[8:].strip()  # Remove "new room" prefix
+            pending_row = {
+                "Room": current_room,
+                "Attribute": "",
+                "Feature": "",
+                "Comment": "",
+                "Tenant Responsibility (TR)": ""
+            }
 
         # Handle "new attribute"
-        elif i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "attribute":
-            print(f"Found 'new attribute' at position {i}")
+        elif lower_line.startswith("new attribute"):
+            # If we have a pending room but no attribute yet, add to same row
+            if pending_row["Room"] and not pending_row["Attribute"]:
+                current_attribute = line[13:].strip()  # Remove "new attribute" prefix
+                pending_row["Attribute"] = current_attribute
+            else:
+                # Otherwise, save pending row and start new row
+                if any(pending_row.values()):
+                    results.append(pending_row.copy())
 
-            # Save room data
-            if current_mode == "room" and buffer:
-                cleaned_buffer = buffer.strip()
-                if cleaned_buffer.endswith('.'):
-                    cleaned_buffer = cleaned_buffer[:-1]
-                current_room = cleaned_buffer
-                print(f"Set current room to: {current_room}")
-
-            # Move to attribute collection
-            current_mode = "attribute"
-            buffer = ""
-
-            # Reset feature tracking for this new attribute
-            written_features = set()
-
-            i += 2
-            continue
+                current_attribute = line[13:].strip()  # Remove "new attribute" prefix
+                pending_row = {
+                    "Room": "",  # Empty for hierarchical display
+                    "Attribute": current_attribute,
+                    "Feature": "",
+                    "Comment": "",
+                    "Tenant Responsibility (TR)": ""
+                }
 
         # Handle "new feature"
-        elif i < len(words) - 1 and words[i].lower() == "new" and words[i + 1].lower() == "feature":
-            print(f"Found 'new feature' at position {i}")
+        elif lower_line.startswith("new feature"):
+            # If we have a pending attribute but no feature yet, add to same row
+            if (pending_row["Room"] or pending_row["Attribute"]) and not pending_row["Feature"]:
+                current_feature = line[11:].strip()  # Remove "new feature" prefix
+                pending_row["Feature"] = current_feature
+            else:
+                # Otherwise, save pending row and start new row
+                if any(pending_row.values()):
+                    results.append(pending_row.copy())
 
-            # Save attribute data
-            if current_mode == "attribute" and buffer:
-                cleaned_buffer = buffer.strip()
-                if cleaned_buffer.endswith('.'):
-                    cleaned_buffer = cleaned_buffer[:-1]
-                normalized_buffer = cleaned_buffer.lower()
+                current_feature = line[11:].strip()  # Remove "new feature" prefix
+                pending_row = {
+                    "Room": "",  # Empty for hierarchical display
+                    "Attribute": "",  # Empty for hierarchical display
+                    "Feature": current_feature,
+                    "Comment": "",
+                    "Tenant Responsibility (TR)": ""
+                }
 
-                if any(attr == normalized_buffer for attr in valid_attributes):
-                    current_attribute = normalized_buffer.title()
-                    print(f"Set current attribute to: {current_attribute}")
-                else:
-                    closest_match = min(valid_attributes, key=lambda x:
-                    sum(1 for a, b in zip(x, normalized_buffer) if a != b))
-                    current_attribute = closest_match.title()
-                    print(f"Invalid attribute '{normalized_buffer}', using closest match: {current_attribute}")
+        # Handle "comment"
+        elif lower_line.startswith("comment"):
+            comment_text = line[7:].strip()  # Remove "comment" prefix
+            is_tenant_responsibility = "tenant responsibility" in comment_text.lower()
 
-            # Move to feature collection
-            current_mode = "feature"
-            buffer = ""
-            i += 2
-            continue
+            # Apply text formatting if function is available
+            if callable(format_text):
+                try:
+                    comment_text = format_text(comment_text)
+                except Exception as e:
+                    print(f"Warning: Error formatting comment: {str(e)}")
 
-        # Handle "comment" - THE KEY PART FOR FIXING MULTIPLE COMMENTS
-        elif words[i].lower() == "comment":
-            print(f"Found 'comment' at position {i}")
+            # If we have a pending feature but no comment yet, add to same row
+            if (pending_row["Room"] or pending_row["Attribute"] or pending_row["Feature"]) and not pending_row[
+                "Comment"]:
+                pending_row["Comment"] = comment_text
+                pending_row["Tenant Responsibility (TR)"] = "✓" if is_tenant_responsibility else ""
+            else:
+                # Otherwise, save pending row and start new row with just the comment
+                if any(pending_row.values()):
+                    results.append(pending_row.copy())
 
-            # Save feature data if coming from feature mode
-            if current_mode == "feature" and buffer:
-                cleaned_buffer = buffer.strip()
-                if cleaned_buffer.endswith('.'):
-                    cleaned_buffer = cleaned_buffer[:-1]
-                current_feature = cleaned_buffer
-                print(f"Set current feature to: {current_feature}")
-
-            # CRITICAL: If we're already in comment mode, save the previous comment
-            # as a separate row BEFORE starting to collect the new comment
-            if current_mode == "comment" and buffer and current_feature:
-                comment_count += 1
-                is_tenant_responsibility = "tenant responsibility" in buffer.lower()
-                comment_text = format_text(buffer.strip()) if callable(format_text) else buffer.strip()
-
-                print(f"Saving comment from buffer before new comment: '{comment_text[:50]}...'")
-
-                # For hierarchical display: room appears only if not seen before
-                output_room = current_room if current_room not in written_rooms else ""
-                if current_room not in written_rooms:
-                    written_rooms.add(current_room)
-
-                # For attribute hierarchical display
-                room_attr_key = f"{current_room}:{current_attribute}"
-                output_attribute = current_attribute if room_attr_key not in written_attributes else ""
-                if room_attr_key not in written_attributes:
-                    written_attributes.add(room_attr_key)
-
-                # For feature hierarchical display
-                attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
-                output_feature = current_feature if attr_feature_key not in written_features else ""
-                if attr_feature_key not in written_features:
-                    written_features.add(attr_feature_key)
-
-                # Add this comment as a separate row
-                results.append({
-                    "Room": output_room,
-                    "Attribute": output_attribute,
-                    "Feature": output_feature,
+                pending_row = {
+                    "Room": "",  # Empty for hierarchical display
+                    "Attribute": "",  # Empty for hierarchical display
+                    "Feature": "",  # Empty for hierarchical display
                     "Comment": comment_text,
                     "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
-                })
-                print(f"Added comment #{comment_count}: {comment_text[:50]}...")
+                }
 
-            # Reset for new comment
-            current_mode = "comment"
-            buffer = ""
-            i += 1
-            continue
+    # Add final pending row if any
+    if any(pending_row.values()):
+        results.append(pending_row.copy())
 
-        # Add word to buffer
-        if current_mode:
-            buffer += words[i] + " "
-
-        # Move to next word
-        i += 1
-
-    # Handle final pending comment
-    if current_mode == "comment" and buffer and current_feature:
-        comment_count += 1
-        is_tenant_responsibility = "tenant responsibility" in buffer.lower()
-        comment_text = format_text(buffer.strip()) if callable(format_text) else buffer.strip()
-
-        print(f"Saving final comment from buffer: '{comment_text[:50]}...'")
-
-        # For hierarchical display: room appears only if not seen before
-        output_room = current_room if current_room not in written_rooms else ""
-        if current_room not in written_rooms:
-            written_rooms.add(current_room)
-
-        # For attribute hierarchical display
-        room_attr_key = f"{current_room}:{current_attribute}"
-        output_attribute = current_attribute if room_attr_key not in written_attributes else ""
-        if room_attr_key not in written_attributes:
-            written_attributes.add(room_attr_key)
-
-        # For feature hierarchical display
-        attr_feature_key = f"{current_room}:{current_attribute}:{current_feature}"
-        output_feature = current_feature if attr_feature_key not in written_features else ""
-        if attr_feature_key not in written_features:
-            written_features.add(attr_feature_key)
-
-        results.append({
-            "Room": output_room,
-            "Attribute": output_attribute,
-            "Feature": output_feature,
-            "Comment": comment_text,
-            "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
-        })
-        print(f"Added final comment #{comment_count}: {comment_text[:50]}...")
-
-    print(f"\nProcessed {len(results)} entries")
-    print(f"Total comments found: {comment_count}")
-
-    # Last sanity check - just in case format_text is failing
-    for i, result in enumerate(results):
-        if not result["Comment"] and "comment" in result:
-            # Possible fallback if the "Comment" field is empty but a comment exists
-            results[i]["Comment"] = result.get("comment", "")
-            print(f"Fixed missing Comment in row {i}")
+    print(f"Processed transcript into {len(results)} rows")
 
     return results
 
 
+import csv
+
 def process_audio_file(file_path, original_filename):
-    """Process audio file with enhanced GPT correction and proper multi-comment handling."""
-    # Get original transcription using your existing method
+    """Process audio file with enhanced GPT correction."""
+    # Get original transcription
     transcript = transcribe_audio_optimized(file_path)
 
     if not transcript:
         return None, "Failed to transcribe audio"
 
-    # Apply GPT correction to the full transcript before processing
+    # Apply GPT correction
     corrected_transcript = correct_transcript_with_gpt(transcript)
 
-    # Log the original and corrected transcripts for debugging
-    print(f"Original transcript: {transcript[:200]}...")
-    print(f"Corrected transcript: {corrected_transcript[:200]}...")
-
-    # Process the corrected transcript using your existing function
+    # Process the corrected transcript
     results = process_transcript(corrected_transcript)
 
     if not results:
         return None, "No features found in the transcript"
 
-    # Log the results before DataFrame conversion for debugging
-    print(f"Results from process_transcript: {len(results)} entries")
-    for i, entry in enumerate(results):
-        print(f"Entry {i}: Room='{entry.get('Room', '')}', Attr='{entry.get('Attribute', '')}', "
-              f"Feature='{entry.get('Feature', '')}', Comment='{entry.get('Comment', '')}'")
-
-    # Create DataFrame - MAKE SURE TO CAPTURE ALL COLUMNS
+    # Create DataFrame
     df = pd.DataFrame(results)
 
-    # Generate output filename based on input audio filename
+    # Generate output filename
     base_filename = Path(original_filename).stem
     output_filename = f"{base_filename}_transcript.csv"
     output_path = TRANSCRIPT_FOLDER / output_filename
 
-    # Save to CSV - ENSURE THAT ALL COLUMNS ARE SAVED
+    # Save to CSV - without using csv.QUOTE_ALL to avoid the error
+    # Just use the default pandas settings
     df.to_csv(output_path, index=False)
 
-    # Log the DataFrame before saving to verify content
-    print(f"DataFrame shape before saving: {df.shape}")
-    print(f"DataFrame columns: {df.columns.tolist()}")
+    return output_path, None
 
-    # Check if comments are present in the DataFrame
-    comment_count = df['Comment'].count()
-    print(f"Comment count in DataFrame: {comment_count}")
+# If you want to keep the quoting behavior but don't want to add the import,
+# you can use this alternative:
+def process_audio_file_alt(file_path, original_filename):
+    """Process audio file with enhanced GPT correction."""
+    # Get original transcription
+    transcript = transcribe_audio_optimized(file_path)
 
-    # Check if there are any missing comments
-    if comment_count < len(results):
-        print("WARNING: Some comments may be missing from the DataFrame!")
+    if not transcript:
+        return None, "Failed to transcribe audio"
 
-    # Double-check the saved CSV file
-    try:
-        saved_df = pd.read_csv(output_path)
-        print(f"Saved CSV shape: {saved_df.shape}")
-        print(f"Saved CSV columns: {saved_df.columns.tolist()}")
-        print(f"Comment count in saved CSV: {saved_df['Comment'].count()}")
-    except Exception as e:
-        print(f"Error verifying saved CSV: {str(e)}")
+    # Apply GPT correction
+    corrected_transcript = correct_transcript_with_gpt(transcript)
+
+    # Process the corrected transcript
+    results = process_transcript(corrected_transcript)
+
+    if not results:
+        return None, "No features found in the transcript"
+
+    # Create DataFrame
+    df = pd.DataFrame(results)
+
+    # Generate output filename
+    base_filename = Path(original_filename).stem
+    output_filename = f"{base_filename}_transcript.csv"
+    output_path = TRANSCRIPT_FOLDER / output_filename
+
+    # Save to CSV - use pandas built-in quoting option instead of csv.QUOTE_ALL
+    df.to_csv(output_path, index=False, quoting=1)  # 1 is equivalent to csv.QUOTE_ALL
 
     return output_path, None
 
@@ -1085,55 +932,18 @@ def process_file(process_id):
     original_filename = file_path.name.replace(f"{process_id}_", "")
 
     try:
-        # Use a thread pool for parallel processing
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            # Get options for processing
-            use_gpt = request.form.get('use_gpt', 'true').lower() == 'true'
+        # Process the file - ALWAYS use the fixed function
+        result_path, error_msg = process_audio_file(str(file_path), original_filename)
 
-            if use_gpt:
-                # Use the enhanced processing with GPT correction
-                future = executor.submit(enhanced_process_audio_file, str(file_path), original_filename)
-            else:
-                # Use the original transcription function
-                transcript_future = executor.submit(transcribe_audio_optimized, str(file_path))
-                transcript = transcript_future.result()
+        if error_msg:
+            return jsonify({'status': 'error', 'message': error_msg})
 
-                if not transcript:
-                    return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
-
-                # Process the transcript
-                results = process_transcript(transcript)
-
-                if not results:
-                    return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
-
-                # Create DataFrame
-                df = pd.DataFrame(results)
-
-                # Generate output filename based on input audio filename
-                base_filename = Path(original_filename).stem
-                output_filename = f"{base_filename}_transcript.csv"
-                output_path = TRANSCRIPT_FOLDER / output_filename
-
-                # Save to CSV
-                df.to_csv(output_path, index=False)
-
-                # Set the result
-                result_path, error_msg = output_path, None
-
-            if use_gpt:
-                # Get the result from the future if using GPT
-                result_path, error_msg = future.result()
-
-                if error_msg:
-                    return jsonify({'status': 'error', 'message': error_msg})
-
-            # Return success with the output filename
-            return jsonify({
-                'status': 'success',
-                'outputFilename': Path(result_path).name,
-                'message': 'Processing complete' + (' with GPT correction' if use_gpt else '')
-            })
+        # Return success with the output filename
+        return jsonify({
+            'status': 'success',
+            'outputFilename': Path(result_path).name,
+            'message': 'Processing complete'
+        })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
     finally:
