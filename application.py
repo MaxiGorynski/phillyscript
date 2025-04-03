@@ -7,6 +7,7 @@ import boto3
 from io import BytesIO
 import logging
 import shutil
+import openai
 
 # Configure logging first - increase level to see more details
 logging.basicConfig(level=logging.INFO,
@@ -19,6 +20,10 @@ app = application  # AWS ElasticBeanstalk looks for 'application' while Flask CL
 
 # Configure app before importing other modules
 application.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-local-only')
+
+client = openai.OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY")
+)
 
 # Get DATABASE_URL from environment, with a SQLite fallback
 database_url = os.environ.get('DATABASE_URL')
@@ -225,15 +230,6 @@ import difflib
 from docx import Document
 from datetime import datetime
 from flask_login import login_required, current_user
-
-
-# Add a simple home route that doesn't require database
-@application.route('/api/hello')
-def hello():
-    return jsonify({
-        'message': 'Hello from PhillyScript!',
-        'status': 'Service is running'
-    })
 
 
 # Create database tables ONCE within an application context with improved error handling
@@ -502,14 +498,181 @@ def format_text(text):
     return formatted_text
 
 
+def correct_transcript_with_gpt(transcript):
+    """
+    Use GPT-3.5-Turbo to correct property inspection transcription errors
+    while strictly preserving the format.
+
+    Args:
+        transcript: The raw transcription text from basic speech recognition
+
+    Returns:
+        Corrected transcript text with domain-specific terms fixed
+    """
+    try:
+        # Skip processing if transcript is empty
+        if not transcript:
+            return transcript
+
+        # Log the original transcript for debugging
+        logging.info(f"Original transcript: {transcript}")
+
+        # Create a system prompt with property inspection domain knowledge
+        # with strict instructions about format preservation
+        system_prompt = """You are an expert assistant for property inspectors. 
+        Your task is to correct property inspection transcription errors while precisely maintaining the exact format.
+
+        EXTREMELY IMPORTANT: You must preserve all format markers EXACTLY as they appear:
+        - "new room" must remain exactly as "new room"
+        - "new attribute" must remain exactly as "new attribute"
+        - "new feature" must remain exactly as "new feature" 
+        - "comment" must remain exactly as "comment"
+
+        These markers control how the transcript is processed, and any change to them will break the processing.
+
+        Only correct real estate terminology, proper nouns, and obvious speech recognition errors:
+        - "Germany" should be corrected to "generally" when referring to condition
+        - "Mark" to "mark" when not referring to a person's name
+        - "tennant" to "tenant"
+        - "lanlord" to "landlord"
+
+        DO NOT add punctuation, capitalization, or restructure the text in any way.
+        DO NOT combine or split sections marked by these key phrases.
+        DO NOT add or remove any "new room", "new attribute", "new feature", or "comment" markers.
+
+        Return ONLY the corrected transcript with minimal changes.
+        """
+
+        # Send the transcript to GPT-3.5-Turbo for correction
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",
+                 "content": f"Correct ONLY the terminology errors in this property inspection transcript while preserving the exact format:\n\n{transcript}"}
+            ],
+            temperature=0.1,  # Very low temperature for more deterministic output
+            max_tokens=2000
+        )
+
+        # Extract the corrected text
+        corrected_transcript = response.choices[0].message.content.strip()
+
+        # Log the corrected transcript for debugging
+        logging.info(f"Corrected transcript: {corrected_transcript}")
+
+        # Check if key markers are preserved
+        key_markers = ["new room", "new attribute", "new feature", "comment"]
+        for marker in key_markers:
+            original_count = transcript.lower().count(marker)
+            corrected_count = corrected_transcript.lower().count(marker)
+
+            if original_count != corrected_count:
+                logging.warning(
+                    f"Format marker '{marker}' count changed! Original: {original_count}, Corrected: {corrected_count}")
+                return transcript  # Return original if format changed
+
+        return corrected_transcript
+
+    except Exception as e:
+        logging.error(f"Error in GPT correction: {str(e)}")
+        # Fall back to original transcript if API call fails
+        return transcript
+
+
+def correct_csv_with_gpt(csv_path):
+    """
+    Process a completed transcript CSV with GPT to correct terminology and speech errors.
+
+    Args:
+        csv_path: Path to the CSV file containing transcription data
+
+    Returns:
+        Path to the corrected CSV file
+    """
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_path)
+
+        # Check if we have comments to process
+        if 'Comment' not in df.columns:
+            logging.warning(f"No 'Comment' column found in {csv_path}")
+            return csv_path
+
+        # Process each comment with GPT-4
+        logging.info(f"Processing {len(df)} comments with GPT-4")
+        for i, row in df.iterrows():
+            if pd.notna(row['Comment']) and row['Comment'].strip():
+                original_comment = row['Comment']
+                corrected_comment = correct_transcript_with_gpt(original_comment)
+
+                # Update the dataframe with corrected comment
+                df.at[i, 'Comment'] = corrected_comment
+
+                # Log if there was a change
+                if original_comment != corrected_comment:
+                    logging.info(f"Correction made: '{original_comment}' → '{corrected_comment}'")
+
+        # Create path for corrected file
+        original_filename = Path(csv_path).name
+        corrected_filename = f"corrected_{original_filename}"
+        corrected_path = Path(csv_path).parent / corrected_filename
+
+        # Save the corrected CSV
+        df.to_csv(corrected_path, index=False)
+        logging.info(f"Corrected CSV saved to {corrected_path}")
+
+        return corrected_path
+
+    except Exception as e:
+        logging.error(f"Error processing CSV with GPT: {str(e)}")
+        # Return original path if processing fails
+        return csv_path
+
+
+# Modify your existing process_audio_file function to incorporate GPT correction
+def enhanced_process_audio_file(file_path, original_filename):
+    """Process audio file with enhanced GPT correction."""
+    # Get original transcription using your existing method
+    transcript = transcribe_audio_optimized(file_path)
+
+    if not transcript:
+        return None, "Failed to transcribe audio"
+
+    # Apply GPT correction to the full transcript before processing
+    corrected_transcript = correct_transcript_with_gpt(transcript)
+
+    # Process the corrected transcript using your existing function
+    results = process_transcript(corrected_transcript)
+
+    if not results:
+        return None, "No features found in the transcript"
+
+    # Create DataFrame
+    df = pd.DataFrame(results)
+
+    # Generate output filename based on input audio filename
+    base_filename = Path(original_filename).stem
+    output_filename = f"{base_filename}_transcript.csv"
+    output_path = TRANSCRIPT_FOLDER / output_filename
+
+    # Save to CSV
+    df.to_csv(output_path, index=False)
+
+    return output_path, None
+
+
+# Alternative approach: Post-process existing CSVs
+def post_process_existing_csv(csv_path):
+    """Apply GPT correction to an existing CSV file."""
+    return correct_csv_with_gpt(csv_path)
+
 def process_transcript(transcript):
     """
-    Process transcript text to extract room, attribute, features and comments.
-    Returns a list of dictionaries containing these elements.
-    Also detects 'Tenant Responsibility' mentions in comments.
-    Room, Attribute, and Feature values only appear in the first row they're mentioned.
+    Debug version of process_transcript function with extra logging.
     """
-    print("\nProcessing transcript...")
+    print("\nProcessing transcript with debug...")
+    logging.info(f"DEBUG: Processing transcript: {transcript}")
     results = []
 
     # Initialize current state
@@ -531,12 +694,16 @@ def process_transcript(transcript):
 
     # Split transcript into words for easier processing
     words = transcript.split()
+    logging.info(f"DEBUG: Word count: {len(words)}")
+    logging.info(f"DEBUG: Words: {words}")
+
     i = 0
     buffer = ""  # To collect text between markers
 
     while i < len(words):
         # Detect markers that indicate a mode change
         if i < len(words) - 1 and words[i] == "new" and words[i + 1] == "room":
+            logging.info(f"DEBUG: Found 'new room' marker at position {i}")
             # Save any previous data before changing modes
             if current_mode == "comment" and buffer and current_feature:
                 # Check for "Tenant Responsibility" in the comment
@@ -576,6 +743,7 @@ def process_transcript(transcript):
             continue
 
         elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "attribute":
+            logging.info(f"DEBUG: Found 'new attribute' marker at position {i}")
             # Save room data if changing from room mode
             if current_mode == "room" and buffer:
                 # Remove any periods from the end of the room name
@@ -595,6 +763,7 @@ def process_transcript(transcript):
             continue
 
         elif i < len(words) - 1 and words[i] == "new" and words[i + 1] == "feature":
+            logging.info(f"DEBUG: Found 'new feature' marker at position {i}")
             # Save attribute data if changing from attribute mode
             if current_mode == "attribute" and buffer:
                 # Normalize and validate attribute
@@ -621,6 +790,7 @@ def process_transcript(transcript):
             continue
 
         elif words[i] == "comment":
+            logging.info(f"DEBUG: Found 'comment' marker at position {i}")
             # Save feature data if changing from feature mode
             if current_mode == "feature" and buffer:
                 # Remove any periods from the end of the feature name
@@ -667,6 +837,7 @@ def process_transcript(transcript):
         # Add current word to the buffer if we're in a collection mode
         if current_mode:
             buffer += words[i] + " "
+            logging.info(f"DEBUG: Added '{words[i]}' to buffer. Current buffer: '{buffer}'")
 
         # Move to next word
         i += 1
@@ -694,19 +865,23 @@ def process_transcript(transcript):
         print(f"Added final comment: {comment_text}")
 
     print(f"\nProcessed {len(results)} entries")
+    logging.info(f"DEBUG: Processed {len(results)} entries. Results: {results}")
     return results
 
 
 def process_audio_file(file_path, original_filename):
-    """Process audio file and create a CSV."""
-    # Transcribe the audio
+    """Process audio file with enhanced GPT correction."""
+    # Get original transcription using your existing method
     transcript = transcribe_audio_optimized(file_path)
 
     if not transcript:
         return None, "Failed to transcribe audio"
 
-    # Process the transcript
-    results = process_transcript(transcript)
+    # Apply GPT correction to the full transcript before processing
+    corrected_transcript = correct_transcript_with_gpt(transcript)
+
+    # Process the corrected transcript using the debug function
+    results = process_transcript_debug(corrected_transcript)
 
     if not results:
         return None, "No features found in the transcript"
@@ -805,7 +980,6 @@ def upload_file():
     })
 
 
-# Update the process_file route to use multithreading
 @application.route('/process/<process_id>', methods=['POST'])
 def process_file(process_id):
     # Find the uploaded file
@@ -820,37 +994,52 @@ def process_file(process_id):
     try:
         # Use a thread pool for parallel processing
         with ThreadPoolExecutor(max_workers=2) as executor:
-            # Use the optimized transcription function
-            transcript_future = executor.submit(transcribe_audio_optimized, str(file_path))
+            # Get options for processing
+            use_gpt = request.form.get('use_gpt', 'true').lower() == 'true'
 
-            # Wait for transcription to complete
-            transcript = transcript_future.result()
+            if use_gpt:
+                # Use the enhanced processing with GPT correction
+                future = executor.submit(enhanced_process_audio_file, str(file_path), original_filename)
+            else:
+                # Use the original transcription function
+                transcript_future = executor.submit(transcribe_audio_optimized, str(file_path))
+                transcript = transcript_future.result()
 
-            if not transcript:
-                return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
+                if not transcript:
+                    return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
 
-            # Process the transcript
-            results = process_transcript(transcript)
+                # Process the transcript
+                results = process_transcript(transcript)
 
-            if not results:
-                return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
+                if not results:
+                    return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
 
-            # Create DataFrame
-            df = pd.DataFrame(results)
+                # Create DataFrame
+                df = pd.DataFrame(results)
 
-            # Generate output filename based on input audio filename
-            base_filename = Path(original_filename).stem
-            output_filename = f"{base_filename}_transcript.csv"
-            output_path = TRANSCRIPT_FOLDER / output_filename
+                # Generate output filename based on input audio filename
+                base_filename = Path(original_filename).stem
+                output_filename = f"{base_filename}_transcript.csv"
+                output_path = TRANSCRIPT_FOLDER / output_filename
 
-            # Save to CSV
-            df.to_csv(output_path, index=False)
+                # Save to CSV
+                df.to_csv(output_path, index=False)
+
+                # Set the result
+                result_path, error_msg = output_path, None
+
+            if use_gpt:
+                # Get the result from the future if using GPT
+                result_path, error_msg = future.result()
+
+                if error_msg:
+                    return jsonify({'status': 'error', 'message': error_msg})
 
             # Return success with the output filename
             return jsonify({
                 'status': 'success',
-                'outputFilename': output_path.name,
-                'message': 'Processing complete'
+                'outputFilename': Path(result_path).name,
+                'message': 'Processing complete' + (' with GPT correction' if use_gpt else '')
             })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
@@ -861,6 +1050,34 @@ def process_file(process_id):
         except:
             pass
 
+
+@application.route('/correct_csv/<filename>', methods=['POST'])
+@login_required
+def correct_csv(filename):
+    """Route to apply GPT correction to an existing CSV file."""
+    try:
+        # Find the CSV file
+        csv_path = TRANSCRIPT_FOLDER / filename
+        if not csv_path.exists():
+            return jsonify({
+                'status': 'error',
+                'message': 'CSV file not found'
+            })
+
+        # Apply GPT correction
+        corrected_path = post_process_existing_csv(csv_path)
+
+        # Return path to corrected file
+        return jsonify({
+            'status': 'success',
+            'outputFilename': Path(corrected_path).name,
+            'message': 'CSV corrected successfully'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error correcting CSV: {str(e)}'
+        })
 
 @application.route('/download/<filename>', methods=['GET'])
 def download_file(filename):
