@@ -8,6 +8,9 @@ from io import BytesIO
 import logging
 import shutil
 import openai
+import time
+import tempfile
+import subprocess
 
 # Configure logging first - increase level to see more details
 logging.basicConfig(level=logging.INFO,
@@ -291,6 +294,282 @@ def convert_to_wav(audio_path):
         # Speech recognition might still work for some formats
         return str(audio_path)
 
+
+def optimise_audio_file(file_path, output_dir=None, quality='speech', min_silence_len=700):
+    """
+    Optimise audio file for transcription by applying multiple compression techniques.
+
+    Args:
+        file_path: Path to the original audio file
+        output_dir: Directory to save the optimised file (defaults to same directory)
+        quality: Optimization profile ('speech' or 'high')
+        min_silence_len: Minimum silence length in ms to detect and compress
+
+    Returns:
+        Tuple of (path to optimised file, compression stats dictionary)
+    """
+    start_time = time.time()
+    file_path = Path(file_path)
+
+    if output_dir is None:
+        output_dir = file_path.parent
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(exist_ok=True, parents=True)
+
+    # Generate output filename
+    output_filename = f"optimised_{file_path.stem}.mp3"
+    output_path = output_dir / output_filename
+
+    # Log start of optimization
+    logging.info(f"Starting audio optimization for: {file_path}")
+    original_size = file_path.stat().st_size
+    logging.info(f"Original file size: {original_size / 1024 / 1024:.2f} MB")
+
+    try:
+        # Load audio file
+        audio = AudioSegment.from_file(str(file_path))
+        original_duration = len(audio) / 1000  # in seconds
+
+        # Step 1: Convert to mono if stereo
+        was_stereo = audio.channels > 1
+        if was_stereo:
+            audio = audio.set_channels(1)
+            logging.info("Converted audio to mono")
+
+        # Step 2: Downsample to 16kHz for speech (22kHz for high quality)
+        target_rate = 16000 if quality == 'speech' else 22050
+        if audio.frame_rate != target_rate:
+            audio = audio.set_frame_rate(target_rate)
+            logging.info(f"Downsampled audio to {target_rate}Hz")
+
+        # Step 3: Detect and compress silence
+        if min_silence_len > 0:
+            # Detect silence
+            silence_threshold = -40  # dB, adjust as needed
+            chunks = detect_silence_chunks(audio, silence_threshold, min_silence_len)
+
+            if chunks:
+                # Compress silence by keeping just enough to maintain natural pauses
+                compressed_silence_len = 300  # ms for each silence
+                audio = compress_silence(audio, chunks, compressed_silence_len)
+                logging.info(f"Compressed {len(chunks)} silence segments")
+
+        # Step 4: Export with optimised encoding
+        # For speech, use very aggressive compression
+        if quality == 'speech':
+            bitrate = "24k"  # Very low bitrate suitable for speech
+        else:
+            bitrate = "64k"  # Higher quality for general audio
+
+        # Export to WAV with specified parameters
+        audio.export(
+            output_path,
+            format="mp3",
+            parameters=[
+                "-ar", str(target_rate),
+                "-ac", "1",
+                "-b:a", bitrate
+            ]
+        )
+
+        # Calculate compression stats
+        end_time = time.time()
+        compressed_size = output_path.stat().st_size
+        size_reduction = 1 - (compressed_size / original_size)
+        compressed_duration = len(audio) / 1000  # in seconds
+        duration_reduction = 1 - (compressed_duration / original_duration)
+
+        # Log results
+        logging.info(f"Optimised file saved to: {output_path}")
+        logging.info(f"Optimised file size: {compressed_size / 1024 / 1024:.2f} MB")
+        logging.info(f"Size reduction: {size_reduction:.2%}")
+        logging.info(f"Duration reduction: {duration_reduction:.2%}")
+        logging.info(f"Optimization completed in {end_time - start_time:.2f} seconds")
+
+        # Return stats dictionary
+        stats = {
+            "original_path": str(file_path),
+            "optimised_path": str(output_path),
+            "original_size": original_size,
+            "optimised_size": compressed_size,
+            "size_reduction_percent": size_reduction * 100,
+            "original_duration": original_duration,
+            "optimised_duration": compressed_duration,
+            "duration_reduction_percent": duration_reduction * 100,
+            "processing_time": end_time - start_time,
+            "was_stereo": was_stereo,
+            "target_sample_rate": target_rate,
+            "silence_segments_compressed": len(chunks) if min_silence_len > 0 else 0
+        }
+
+        return output_path, stats
+
+    except Exception as e:
+        logging.error(f"Error optimizing audio: {str(e)}")
+        return None, {"error": str(e)}
+
+
+def detect_silence_chunks(audio, silence_threshold=-40, min_silence_len=700):
+    """
+    Detect silent segments in audio.
+
+    Args:
+        audio: AudioSegment to analyze
+        silence_threshold: dB threshold below which is considered silence
+        min_silence_len: minimum silence length in ms
+
+    Returns:
+        List of (start_ms, end_ms) tuples of silence chunks
+    """
+    # Get audio data as numpy array
+    samples = np.array(audio.get_array_of_samples())
+    sample_rate = audio.frame_rate
+
+    # Convert to float between -1 and 1
+    if audio.sample_width == 2:  # 16-bit
+        max_value = 32768.0
+    elif audio.sample_width == 1:  # 8-bit
+        max_value = 128.0
+    else:  # 24 or 32-bit
+        max_value = 2 ** (8 * audio.sample_width - 1)
+
+    samples = samples / max_value
+
+    # Calculate dB values (using small epsilon to avoid log(0))
+    epsilon = 1e-10
+    db_values = 20 * np.log10(np.maximum(np.abs(samples), epsilon))
+
+    # Find segments below threshold
+    is_silence = db_values < silence_threshold
+
+    # Convert to milliseconds positions
+    silence_chunks = []
+    in_silence = False
+    silence_start = 0
+
+    # Factor to convert sample position to ms
+    ms_per_sample = 1000.0 / sample_rate
+
+    for i, silent in enumerate(is_silence):
+        position_ms = i * ms_per_sample
+
+        if silent and not in_silence:
+            # Start of silence
+            in_silence = True
+            silence_start = position_ms
+        elif not silent and in_silence:
+            # End of silence
+            silence_end = position_ms
+            silence_duration = silence_end - silence_start
+
+            # Only keep if long enough
+            if silence_duration >= min_silence_len:
+                silence_chunks.append((int(silence_start), int(silence_end)))
+
+            in_silence = False
+
+    # Check if file ends in silence
+    if in_silence:
+        silence_end = len(samples) * ms_per_sample
+        silence_duration = silence_end - silence_start
+
+        if silence_duration >= min_silence_len:
+            silence_chunks.append((int(silence_start), int(silence_end)))
+
+    return silence_chunks
+
+
+def compress_silence(audio, silence_chunks, target_silence_len=300):
+    """
+    Compress silence segments in audio to a target length.
+
+    Args:
+        audio: AudioSegment to modify
+        silence_chunks: List of (start_ms, end_ms) tuples of silence
+        target_silence_len: Target length in ms for each silence segment
+
+    Returns:
+        New AudioSegment with compressed silence
+    """
+    if not silence_chunks:
+        return audio
+
+    # Sort chunks by start time
+    silence_chunks.sort(key=lambda x: x[0])
+
+    # Initialize new audio segments list
+    segments = []
+    last_end = 0
+
+    for start, end in silence_chunks:
+        # Add audio before silence
+        if start > last_end:
+            segments.append(audio[last_end:start])
+
+        # Add compressed silence - keep the middle portion
+        silence_duration = end - start
+        if silence_duration > target_silence_len:
+            # Calculate start and end points for the portion to keep
+            keep_start = start + (silence_duration - target_silence_len) // 2
+            keep_end = keep_start + target_silence_len
+            segments.append(audio[keep_start:keep_end])
+        else:
+            # If silence is already shorter than target, keep it all
+            segments.append(audio[start:end])
+
+        last_end = end
+
+    # Add remaining audio after last silence
+    if last_end < len(audio):
+        segments.append(audio[last_end:])
+
+    # Concatenate all segments
+    if segments:
+        return sum(segments)
+    return audio
+
+
+def process_uploaded_audio(file_path, original_filename):
+    """
+    Process and optimize an uploaded audio file.
+
+    Args:
+        file_path: Path to the uploaded audio file
+        original_filename: Original filename
+
+    Returns:
+        Tuple of (optimized_path, error_message)
+    """
+    # Create a separate folder for optimized files
+    optimised_folder = Path('/tmp/optimized_audio')
+    optimised_folder.mkdir(exist_ok=True, parents=True)
+
+    # Log the process
+    logging.info(f"Processing uploaded file: {original_filename}")
+
+    try:
+        # Optimize the audio
+        optimised_path, stats = optimise_audio_file(
+            file_path,
+            output_dir=optimised_folder,
+            quality='speech',  # Optimize for speech
+            min_silence_len=700  # Min silence length to compress (ms)
+        )
+
+        if optimised_path is None:
+            return None, f"Failed to optimize audio: {stats.get('error', 'Unknown error')}"
+
+        # Log the optimization results
+        logging.info(
+            f"Audio optimization for {original_filename}: {stats['size_reduction_percent']:.2f}% size reduction")
+
+        # Return the optimized file path
+        return optimised_path, None
+
+    except Exception as e:
+        logging.error(f"Error processing audio {original_filename}: {str(e)}")
+        return None, f"Error processing audio: {str(e)}"
 
 def transcribe_audio_optimized(audio_path):
     """
@@ -932,8 +1211,14 @@ def process_file(process_id):
     original_filename = file_path.name.replace(f"{process_id}_", "")
 
     try:
-        # Process the file - ALWAYS use the fixed function
-        result_path, error_msg = process_audio_file(str(file_path), original_filename)
+        # First optimize the audio file
+        optimized_path, error_msg = process_uploaded_audio(str(file_path), original_filename)
+
+        if error_msg:
+            return jsonify({'status': 'error', 'message': error_msg})
+
+        # Now process with the optimized file
+        result_path, error_msg = process_audio_file(str(optimized_path), original_filename)
 
         if error_msg:
             return jsonify({'status': 'error', 'message': error_msg})
