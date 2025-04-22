@@ -349,7 +349,7 @@
                         <div class="image-upload-container" id="upload-room-${index}">
                             <div class="upload-icon">📷</div>
                             <p>Drag & drop images here or click to select files</p>
-                            <input type="file" id="room-images-${index}" name="roomImages[${room}]"
+                            <input type="file" id="room-images-${index}" name="roomImages_${room}"
                                 class="file-input" multiple accept="image/*">
                         </div>
                         <div class="image-preview-container" id="preview-room-${index}">
@@ -485,6 +485,7 @@
 
             // Handle form submission
             // Handle form submission
+            // Replace the form submission event handler with this fixed version
             document.getElementById('report-form').addEventListener('submit', function(e) {
                 e.preventDefault();
 
@@ -514,12 +515,21 @@
                     const fileInput = section.querySelector('input[type="file"]');
 
                     if (fileInput && fileInput.files.length > 0) {
-                        // Add all files from this input
+                        // Add all files from this input - using a consistent naming convention
+                        // that will be easier for Flask to parse
                         for (let i = 0; i < fileInput.files.length; i++) {
-                            formData.append(`roomImages[${roomName}]`, fileInput.files[i]);
+                            // Use this format instead: roomImages_RoomName_index
+                            // This avoids square brackets which can cause issues
+                            formData.append(`roomImages_${roomName}`, fileInput.files[i]);
                         }
                     }
                 });
+
+                // For debugging - log all form data keys
+                console.log('FormData keys:');
+                for (const pair of formData.entries()) {
+                    console.log(pair[0]);
+                }
 
                 // Simulate progress
                 simulateProgress();

@@ -1605,7 +1605,7 @@ def generate_report():
         # Log the report type being generated
         logger.info(f"Generating report of type: {report_type}")
 
-        result_path = generate_docx_report(csv_path, report_type)
+        result_path = generate_enhanced_docx_report(csv_path, report_type)
 
         # Clean up temporary file if it was uploaded
         if not use_latest:
@@ -2251,23 +2251,50 @@ def generate_enhanced_report():
                     'message': 'CSV file not found'
                 })
 
-        # Process uploaded images for each room
-        # Update the image processing in the generate_enhanced_report route
-        # Replace the image processing section with this code:
-
-        # Process uploaded images for each room
+        # Process uploaded images for each room - UPDATED VERSION
         room_images = {}
 
-        # Debug: print all keys in request.files
+        # Debug: print all keys in request.form and request.files
         logging.info(f"Form keys: {list(request.form.keys())}")
         logging.info(f"File keys: {list(request.files.keys())}")
+        logging.info(f"Raw request.files: {request.files}")
 
-        # Check for image files in the request
+        # Check for image files in the request with the new naming convention: roomImages_RoomName
+        for key in request.files.keys():
+            if key.startswith('roomImages_'):
+                # Extract room name from the input name format: roomImages_RoomName
+                room_name = key[len('roomImages_'):].lower()  # Extract what's after 'roomImages_'
+                logging.info(f"Processing images for room: {room_name}")
+
+                # Initialize room in the dictionary if needed
+                if room_name not in room_images:
+                    room_images[room_name] = []
+
+                # Get all files for this room
+                files = request.files.getlist(key)
+                logging.info(f"Number of files for {room_name}: {len(files)}")
+
+                # Save each image file
+                for file in files:
+                    if file and file.filename:
+                        # Generate a unique filename
+                        img_id = str(uuid.uuid4())
+                        img_ext = Path(secure_filename(file.filename)).suffix
+                        img_path = UPLOAD_FOLDER / f"{img_id}{img_ext}"
+
+                        # Save the image
+                        file.save(img_path)
+                        room_images[room_name].append(str(img_path))
+
+                        # Log the save
+                        logging.info(f"Saved image for {room_name}: {img_path} (from {file.filename})")
+
+        # Also check for the original format (as a fallback)
         for key in request.files.keys():
             if key.startswith('roomImages['):
                 # Extract room name from the input name format: roomImages[Room Name]
                 room_name = key[11:-1].lower()  # Extract what's between 'roomImages[' and ']'
-                logging.info(f"Processing images for room: {room_name}")
+                logging.info(f"Processing images for room (bracket format): {room_name}")
 
                 # Initialize room in the dictionary if needed
                 if room_name not in room_images:
