@@ -235,7 +235,7 @@
         <h1 class="page-title">Enhanced Report Builder</h1>
         <div class="report-type-badge" id="report-type">Loading Report Type...</div>
 
-        <form id="report-form">
+        <form id="report-form" enctype="multipart/form-data">
             <div class="section">
                 <h2 class="section-title">Property Details</h2>
                 <div class="form-group">
@@ -279,6 +279,7 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // Get report type and CSV ID from URL parameters
+            const roomFiles = {}; // Object to track files for each room
             const urlParams = new URLSearchParams(window.location.search);
             const reportType = urlParams.get('type');
             const csvId = urlParams.get('csvId');
@@ -415,20 +416,27 @@
                 function handleFiles(files) {
                     if (!files.length) return;
 
-                    // Get existing count of images
-                    const existingImages = previewContainer.querySelectorAll('.image-preview').length;
+                    // Initialize room files array if needed
+                    if (!roomFiles[index]) {
+                        roomFiles[index] = [];
+                    }
 
-                    // Update image count with both existing and new images
-                    const totalImages = existingImages + files.length;
-                    imageCount.textContent = `${totalImages} image${totalImages === 1 ? '' : 's'}`;
-
-                    // Add preview for each new image (don't clear existing ones)
-                    Array.from(files).forEach((file, i) => {
+                    // Add new files to tracking array
+                    Array.from(files).forEach(file => {
                         if (!file.type.match('image.*')) return;
+
+                        // Add file to tracking array with a unique ID
+                        const fileId = Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                        roomFiles[index].push({
+                            id: fileId,
+                            file: file,
+                            name: file.name
+                        });
 
                         // Create preview element
                         const preview = document.createElement('div');
                         preview.className = 'image-preview';
+                        preview.dataset.fileId = fileId;
 
                         // Create image element
                         const img = document.createElement('img');
@@ -438,7 +446,7 @@
                         const removeBtn = document.createElement('button');
                         removeBtn.className = 'remove-image';
                         removeBtn.textContent = '×';
-                        removeBtn.setAttribute('data-file', file.name);
+                        removeBtn.dataset.fileId = fileId;
                         preview.appendChild(removeBtn);
 
                         // Add preview to container
@@ -446,11 +454,9 @@
 
                         // Read the file and set the image source
                         const reader = new FileReader();
-                        reader.onload = (function(aImg) {
-                            return function(e) {
-                                aImg.src = e.target.result;
-                            };
-                        })(img);
+                        reader.onload = function(e) {
+                            img.src = e.target.result;
+                        };
                         reader.readAsDataURL(file);
 
                         // Handle remove button click
@@ -461,11 +467,16 @@
                             // Remove this preview
                             previewContainer.removeChild(preview);
 
+                            // Remove file from tracking array
+                            roomFiles[index] = roomFiles[index].filter(item => item.id !== fileId);
+
                             // Update image count
-                            const currentCount = previewContainer.querySelectorAll('.image-preview').length;
-                            imageCount.textContent = `${currentCount} image${currentCount === 1 ? '' : 's'}`;
+                            imageCount.textContent = `${roomFiles[index].length} image${roomFiles[index].length === 1 ? '' : 's'}`;
                         });
                     });
+
+                    // Update image count
+                    imageCount.textContent = `${roomFiles[index].length} image${roomFiles[index].length === 1 ? '' : 's'}`;
                 }
 
                 // Function to update the file input
@@ -483,9 +494,36 @@
                 e.stopPropagation();
             }
 
+            function testFileUpload() {
+                const testForm = new FormData();
+                const testFile = roomFiles[0]?.[0]?.file;
+
+                if (testFile) {
+                    testForm.append('testFile', testFile);
+                    testForm.append('testField', 'Test upload');
+
+                    console.log("Sending test file upload:", testFile.name, testFile.size);
+
+                    fetch('/test_file_upload', {
+                        method: 'POST',
+                        body: testForm
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log("Test upload response:", data);
+                    })
+                    .catch(error => {
+                        console.error("Test upload error:", error);
+                    });
+
+                    return true;
+                } else {
+                    console.log("No files available for test upload");
+                    return false;
+                }
+            }
+
             // Handle form submission
-            // Handle form submission
-            // Replace the form submission event handler with this fixed version
             document.getElementById('report-form').addEventListener('submit', function(e) {
                 e.preventDefault();
 
@@ -506,29 +544,32 @@
                 formData.append('reportType', urlParams.get('type') || 'full');
                 formData.append('csvId', urlParams.get('csvId') || 'latest');
 
-                // Get all room sections
-                const roomSections = document.querySelectorAll('.room-section');
+                // Add files from our tracking system
+                let totalFiles = 0;
+                Object.keys(roomFiles).forEach(roomIndex => {
+                    const roomSection = document.querySelectorAll('.room-section')[roomIndex];
+                    const roomName = roomSection.getAttribute('data-room');
 
-                // Add files for each room
-                roomSections.forEach(section => {
-                    const roomName = section.getAttribute('data-room');
-                    const fileInput = section.querySelector('input[type="file"]');
-
-                    if (fileInput && fileInput.files.length > 0) {
-                        // Add all files from this input - using a consistent naming convention
-                        // that will be easier for Flask to parse
-                        for (let i = 0; i < fileInput.files.length; i++) {
-                            // Use this format instead: roomImages_RoomName_index
-                            // This avoids square brackets which can cause issues
-                            formData.append(`roomImages_${roomName}`, fileInput.files[i]);
-                        }
-                    }
+                    roomFiles[roomIndex].forEach((fileData, fileIndex) => {
+                        formData.append(`roomFile_${roomIndex}_${fileIndex}`, fileData.file);
+                        formData.append(`roomName_${roomIndex}_${fileIndex}`, roomName);
+                        totalFiles++;
+                    });
                 });
 
-                // For debugging - log all form data keys
-                console.log('FormData keys:');
+                // For debugging - log all form data entries with file sizes
+                console.log(`FormData contains ${totalFiles} files:`);
                 for (const pair of formData.entries()) {
-                    console.log(pair[0]);
+                    if (pair[1] instanceof File) {
+                        console.log(`${pair[0]}: File - ${pair[1].name} (${pair[1].size} bytes)`);
+                    } else {
+                        console.log(`${pair[0]}: ${pair[1]}`);
+                    }
+                }
+
+                // Validate form before submission
+                if (totalFiles === 0) {
+                    console.warn("No files were added to the form data!");
                 }
 
                 // Simulate progress

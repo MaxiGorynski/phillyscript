@@ -138,6 +138,13 @@ UPLOAD_FOLDER = Path('/tmp/temp_uploads')
 TRANSCRIPT_FOLDER = Path('/tmp/temp_transcripts')
 RESULT_FOLDER = Path('/tmp/results')
 
+try:
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    logging.info(f"Upload folder exists: {os.path.exists(UPLOAD_FOLDER)}")
+    logging.info(f"Upload folder permissions: {os.stat(UPLOAD_FOLDER).st_mode}")
+except Exception as e:
+    logging.error(f"Error checking upload folder: {str(e)}")
+
 for folder in [UPLOAD_FOLDER, TRANSCRIPT_FOLDER, RESULT_FOLDER]:
     folder.mkdir(exist_ok=True, parents=True)
 
@@ -1605,7 +1612,7 @@ def generate_report():
         # Log the report type being generated
         logger.info(f"Generating report of type: {report_type}")
 
-        result_path = generate_docx_report(csv_path, report_type)
+        result_path = generate_enhanced_docx_report(csv_path, report_type)
 
         # Clean up temporary file if it was uploaded
         if not use_latest:
@@ -2208,6 +2215,13 @@ def prepare_report():
 def generate_enhanced_report():
     """API endpoint to generate a final report with property details and room images"""
     try:
+
+        # Add detailed request debugging
+        logging.info(f"Request method: {request.method}")
+        logging.info(f"Request content type: {request.content_type}")
+        logging.info(f"Request content length: {request.content_length}")
+        logging.info(f"Request headers: {dict(request.headers)}")
+
         # Get form data
         report_type = request.form.get('reportType', 'full')
         csv_id = request.form.get('csvId')
@@ -2251,23 +2265,54 @@ def generate_enhanced_report():
                     'message': 'CSV file not found'
                 })
 
-        # Process uploaded images for each room
-        # Update the image processing in the generate_enhanced_report route
-        # Replace the image processing section with this code:
-
-        # Process uploaded images for each room
+        # Process uploaded images with simplified field names
         room_images = {}
 
-        # Debug: print all keys in request.files
+        # Debug: print all keys in request.form and request.files
         logging.info(f"Form keys: {list(request.form.keys())}")
         logging.info(f"File keys: {list(request.files.keys())}")
 
-        # Check for image files in the request
+        # Process files with simpler naming convention
+        for key in request.files.keys():
+            if key.startswith('roomFile_'):
+                # Extract index information from the key
+                parts = key.split('_')
+                if len(parts) >= 3:
+                    room_index = parts[1]
+                    file_index = parts[2]
+
+                    # Get the corresponding room name
+                    room_name_key = f"roomName_{room_index}_{file_index}"
+                    room_name = request.form.get(room_name_key, '').lower()
+
+                    if room_name:
+                        logging.info(f"Processing image for room: {room_name}")
+
+                        # Initialize room in the dictionary if needed
+                        if room_name not in room_images:
+                            room_images[room_name] = []
+
+                        # Save the file
+                        file = request.files[key]
+                        if file and file.filename:
+                            # Generate a unique filename
+                            img_id = str(uuid.uuid4())
+                            img_ext = Path(secure_filename(file.filename)).suffix
+                            img_path = UPLOAD_FOLDER / f"{img_id}{img_ext}"
+
+                            # Save the image
+                            file.save(img_path)
+                            room_images[room_name].append(str(img_path))
+
+                            # Log the save
+                            logging.info(f"Saved image for {room_name}: {img_path} (from {file.filename})")
+
+        # Also check for the original format (as a fallback)
         for key in request.files.keys():
             if key.startswith('roomImages['):
                 # Extract room name from the input name format: roomImages[Room Name]
                 room_name = key[11:-1].lower()  # Extract what's between 'roomImages[' and ']'
-                logging.info(f"Processing images for room: {room_name}")
+                logging.info(f"Processing images for room (bracket format): {room_name}")
 
                 # Initialize room in the dictionary if needed
                 if room_name not in room_images:
@@ -2642,6 +2687,64 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
 
     return result_path
 
+
+@application.route('/debug_environment')
+@login_required
+def debug_environment():
+    """Debug endpoint to show environment details"""
+    import sys
+    import platform
+
+    env_info = {
+        'python_version': sys.version,
+        'platform': platform.platform(),
+        'environment_vars': dict(os.environ),
+        'upload_folder': str(UPLOAD_FOLDER),
+        'upload_folder_exists': os.path.exists(UPLOAD_FOLDER),
+        'temp_dir': tempfile.gettempdir(),
+        'disk_space': shutil.disk_usage('/'),
+    }
+
+    return jsonify(env_info)
+
+
+@application.route('/test_upload_page')
+@login_required
+def test_upload_page():
+    """Render the test upload page"""
+    return render_template('test_upload.html')
+
+
+@application.route('/test_file_upload', methods=['POST'])
+def test_file_upload():
+    """Test endpoint for file uploads"""
+    logging.info(f"Test upload - Content type: {request.content_type}")
+    logging.info(f"Test upload - Content length: {request.content_length}")
+    logging.info(f"Test upload - Form keys: {list(request.form.keys())}")
+    logging.info(f"Test upload - File keys: {list(request.files.keys())}")
+
+    file_details = []
+    for key in request.files:
+        file = request.files[key]
+        if file.filename:
+            # Save to test location
+            path = Path(UPLOAD_FOLDER) / f"test_{secure_filename(file.filename)}"
+            file.save(path)
+            size = path.stat().st_size
+            file_details.append({
+                'key': key,
+                'filename': file.filename,
+                'size': size
+            })
+            logging.info(f"Test saved file: {path}, size: {size}")
+
+    return jsonify({
+        'status': 'received',
+        'form_keys': list(request.form.keys()),
+        'file_keys': list(request.files.keys()),
+        'files': file_details
+    })
+
 @application.errorhandler(Exception)
 def handle_error(e):
     logger.error(f"Unhandled exception: {str(e)}")
@@ -2655,7 +2758,7 @@ if __name__ == '__main__':
     num_threads = min(multiprocessing.cpu_count() * 2, 8)  # Use 2x CPU cores, max 8
 
     # Get port from environment or use 8080 as default for App Runner
-    port = int(os.environ.get('PORT', 8080))
+    port = int(os.environ.get('PORT', 5001))
 
     print(f"Starting PhillyScript server with {num_threads} worker threads on port {port}...")
     print("Available routes:")

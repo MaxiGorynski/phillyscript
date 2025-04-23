@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>File Upload Test</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; }
+        button { padding: 10px 15px; background: #4a6fa5; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>File Upload Test</h1>
+
+    <h2>Direct Form Submission</h2>
+    <form action="/test_direct_upload" method="post" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="directText">Test Text Field:</label>
+            <input type="text" id="directText" name="directText" value="Direct Test">
+        </div>
+
+        <div class="form-group">
+            <label for="directFile">Test File Upload:</label>
+            <input type="file" id="directFile" name="directFile" accept="image/*">
+        </div>
+
+        <button type="submit">Test Upload (Direct)</button>
+    </form>
+
+    <hr>
+
+    <h2>JavaScript Form Submission</h2>
+    <form id="jsForm" enctype="multipart/form-data">
+        <div class="form-group">
+            <label for="jsText">Test Text Field:</label>
+            <input type="text" id="jsText" name="jsText" value="JS Test">
+        </div>
+
+        <div class="form-group">
+            <label for="jsFile">Test File Upload:</label>
+            <input type="file" id="jsFile" name="jsFile" accept="image/*">
+        </div>
+
+        <button type="submit">Test Upload (JS)</button>
+    </form>
+
+    <div id="jsResult" style="margin-top: 20px; padding: 10px; background: #f5f5f5;"></div>
+
+    <script>
+        document.getElementById('jsForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const resultDiv = document.getElementById('jsResult');
+            resultDiv.textContent = 'Uploading...';
+
+            const formData = new FormData(this);
+
+            // Log form data to console
+            console.log('FormData entries:');
+            for (const pair of formData.entries()) {
+                const value = pair[1] instanceof File
+                    ? `File: ${pair[1].name} (${pair[1].size} bytes)`
+                    : pair[1];
+                console.log(`${pair[0]}: ${value}`);
+            }
+
+            fetch('/test_js_upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.text())
+            .then(data => {
+                resultDiv.innerHTML = data;
+            })
+            .catch(error => {
+                resultDiv.innerHTML = `Error: ${error.message}`;
+            });
+        });
+    </script>
+</body>
+</html>
