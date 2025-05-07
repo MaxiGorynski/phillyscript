@@ -1,14 +1,18 @@
 from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import User, db
+from models import User, UserRole, db
+from datetime import datetime
+from auth_utils import admin_required, master_admin_required
 
 auth = Blueprint('auth', __name__)
+
 
 def backup_database():
     """Backup the database if possible"""
     if hasattr(current_app, 'backup_db_to_s3'):
         current_app.backup_db_to_s3()
+
 
 @auth.route('/login')
 def login():
@@ -35,6 +39,11 @@ def login_post():
         flash('Your account has been deactivated. Please contact an administrator.')
         return redirect(url_for('auth.login'))
 
+    # Update login statistics
+    user.login_count += 1
+    user.last_login = datetime.utcnow()
+    db.session.commit()
+
     # If validation passes, log in the user
     login_user(user, remember=remember)
 
@@ -42,7 +51,13 @@ def login_post():
     next_page = request.args.get('next')
 
     if not next_page or not next_page.startswith('/'):
-        next_page = url_for('index')
+        # Redirect admins to appropriate page
+        if user.is_master_admin():
+            next_page = url_for('auth.master_admin_dashboard')
+        elif user.is_admin_user:
+            next_page = url_for('auth.admin')
+        else:
+            next_page = url_for('index')
 
     return redirect(next_page)
 
@@ -82,8 +97,9 @@ def signup_post():
     new_user = User(email=email, username=username)
     new_user.set_password(password)
 
-    # Only first user is admin
+    # Only first user gets the master_admin role
     if User.query.count() == 0:
+        new_user.role = UserRole.MASTER_ADMIN.value
         new_user.is_admin = True
 
     # Add the new user to the database
@@ -140,11 +156,11 @@ def update_profile():
     return redirect(url_for('auth.profile'))
 
 
-# Admin-only route example
+# Admin-only route example (using our backwards compatibility property)
 @auth.route('/admin')
 @login_required
 def admin():
-    if not current_user.is_admin:
+    if not current_user.is_admin_user:
         flash('You do not have permission to access the admin area')
         return redirect(url_for('index'))
 
@@ -155,11 +171,17 @@ def admin():
 @auth.route('/admin/toggle_user/<int:user_id>')
 @login_required
 def toggle_user(user_id):
-    if not current_user.is_admin:
+    if not current_user.is_admin_user:
         flash('You do not have permission to perform this action')
         return redirect(url_for('index'))
 
     user = User.query.get_or_404(user_id)
+
+    # Master admins can toggle anyone
+    # Regular admins can't toggle master admins or other admins
+    if not current_user.is_master_admin() and (user.is_master_admin() or user.is_admin_user):
+        flash('You do not have permission to modify this user')
+        return redirect(url_for('auth.admin'))
 
     # Don't allow deactivating your own account
     if user.id == current_user.id:
@@ -173,5 +195,78 @@ def toggle_user(user_id):
     status = "activated" if user.is_active else "deactivated"
     flash(f'User {user.username} has been {status}')
 
-
     return redirect(url_for('auth.admin'))
+
+
+# New Master Admin Dashboard
+@auth.route('/master-admin')
+@master_admin_required
+def master_admin_dashboard():
+    users = User.query.all()
+
+    # Calculate some basic stats
+    user_count = User.query.count()
+    active_users = User.query.filter_by(is_active=True).count()
+    admin_count = User.query.filter(User.role.in_([UserRole.ADMIN.value, UserRole.MASTER_ADMIN.value])).count()
+
+    stats = {
+        'total_users': user_count,
+        'active_users': active_users,
+        'admin_count': admin_count
+    }
+
+    return render_template('master_admin_dashboard.html', users=users, stats=stats)
+
+
+@auth.route('/master-admin/promote/<int:user_id>')
+@master_admin_required
+def promote_user(user_id):
+    user = User.query.get_or_404(user_id)
+
+    # Don't allow promoting master admins
+    if user.is_master_admin():
+        flash('User is already a Master Admin')
+        return redirect(url_for('auth.master_admin_dashboard'))
+
+    # Promote regular user to admin
+    if user.role == UserRole.USER.value:
+        user.role = UserRole.ADMIN.value
+        user.is_admin = True
+        flash(f'User {user.username} has been promoted to Admin')
+
+    # Promote admin to master admin
+    elif user.role == UserRole.ADMIN.value:
+        user.role = UserRole.MASTER_ADMIN.value
+        flash(f'User {user.username} has been promoted to Master Admin')
+
+    db.session.commit()
+    backup_database()
+
+    return redirect(url_for('auth.master_admin_dashboard'))
+
+
+@auth.route('/master-admin/demote/<int:user_id>')
+@master_admin_required
+def demote_user(user_id):
+    user = User.query.get_or_404(user_id)
+
+    # Don't allow demoting yourself
+    if user.id == current_user.id:
+        flash('You cannot demote yourself')
+        return redirect(url_for('auth.master_admin_dashboard'))
+
+    # Demote master admin to admin
+    if user.role == UserRole.MASTER_ADMIN.value:
+        user.role = UserRole.ADMIN.value
+        flash(f'User {user.username} has been demoted to Admin')
+
+    # Demote admin to regular user
+    elif user.role == UserRole.ADMIN.value:
+        user.role = UserRole.USER.value
+        user.is_admin = False
+        flash(f'User {user.username} has been demoted to regular User')
+
+    db.session.commit()
+    backup_database()
+
+    return redirect(url_for('auth.master_admin_dashboard'))

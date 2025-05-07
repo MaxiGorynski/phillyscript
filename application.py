@@ -33,7 +33,7 @@ database_url = os.environ.get('DATABASE_URL')
 logger.info(f"Database URL from environment: {database_url}")
 
 # Determine which database to use
-if not database_url or 'rds.amazonaws.com' in database_url:
+if not database_url:
     fallback_db = 'sqlite:///fallback.db'
     logger.warning(f"Using fallback database: {fallback_db}")
     application.config['SQLALCHEMY_DATABASE_URI'] = fallback_db

@@ -1,0 +1,107 @@
+{% extends 'base.html' %}
+
+{% block title %}Master Admin Dashboard - PhillyScript{% endblock %}
+
+{% block content %}
+<div class="container pt-5">
+    <h1 class="mb-4">Master Admin Dashboard</h1>
+
+    <div class="row mb-5">
+        <div class="col-md-4">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Total Users</h5>
+                    <h2 class="display-4">{{ stats.total_users }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Active Users</h5>
+                    <h2 class="display-4">{{ stats.active_users }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Admin Users</h5>
+                    <h2 class="display-4">{{ stats.admin_count }}</h2>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">
+            <h3>User Management</h3>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Username</th>
+                            <th>Email</th>
+                            <th>Role</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Last Login</th>
+                            <th>Login Count</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td>{{ user.username }}</td>
+                            <td>{{ user.email }}</td>
+                            <td>
+                                <span class="badge {% if user.is_master_admin() %}bg-danger{% elif user.is_admin_user %}bg-warning{% else %}bg-secondary{% endif %}">
+                                    {{ user.role }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge {% if user.is_active %}bg-success{% else %}bg-danger{% endif %}">
+                                    {{ 'Active' if user.is_active else 'Inactive' }}
+                                </span>
+                            </td>
+                            <td>{{ user.created_at.strftime('%Y-%m-%d') }}</td>
+                            <td>{{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'Never' }}</td>
+                            <td>{{ user.login_count }}</td>
+                            <td>
+                                {% if user.id != current_user.id %}
+                                <div class="btn-group">
+                                    <a href="{{ url_for('auth.toggle_user', user_id=user.id) }}" class="btn btn-sm {% if user.is_active %}btn-warning{% else %}btn-success{% endif %}">
+                                        {{ 'Deactivate' if user.is_active else 'Activate' }}
+                                    </a>
+
+                                    {% if not user.is_master_admin() %}
+                                    <a href="{{ url_for('auth.promote_user', user_id=user.id) }}" class="btn btn-sm btn-primary">
+                                        Promote
+                                    </a>
+                                    {% endif %}
+
+                                    {% if user.role != 'user' %}
+                                    <a href="{{ url_for('auth.demote_user', user_id=user.id) }}" class="btn btn-sm btn-danger">
+                                        Demote
+                                    </a>
+                                    {% endif %}
+                                </div>
+                                {% else %}
+                                <span class="text-muted">Current User</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Additional sections for user activity, system stats, etc. could go here -->
+
+</div>
+{% endblock %}
