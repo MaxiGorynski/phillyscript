@@ -233,6 +233,8 @@ import cv2
 import numpy as np
 import re
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash
+import psycopg2
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
@@ -2687,6 +2689,27 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
 
     return result_path
 
+'''Admin Functions'''
+
+@app.route('/init_db', methods=['GET'])
+def init_db():
+    try:
+        # Create admin user if it doesn't exist
+        admin_user = User.query.filter_by(username='admin').first()
+        if not admin_user:
+            admin_user = User(
+                username='admin',
+                email='admin@example.com',
+                role='master_admin'
+            )
+            admin_user.set_password('changeme123')
+            db.session.add(admin_user)
+            db.session.commit()
+            return 'Admin user created successfully!'
+        else:
+            return 'Admin user already exists!'
+    except Exception as e:
+        return f'Error: {str(e)}'
 
 @application.route('/debug_environment')
 @login_required
@@ -2758,7 +2781,7 @@ if __name__ == '__main__':
     num_threads = min(multiprocessing.cpu_count() * 2, 8)  # Use 2x CPU cores, max 8
 
     # Get port from environment or use 8080 as default for App Runner
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 8080))
 
     print(f"Starting PhillyScript server with {num_threads} worker threads on port {port}...")
     print("Available routes:")
