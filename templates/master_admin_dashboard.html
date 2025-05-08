@@ -67,7 +67,12 @@
             <a href="/finalise_report" class="nav-button">Report Builder</a>
 
             {% if current_user.is_authenticated %}
-                <a href="{{ url_for('auth.profile') }}" class="nav-button">Profile</a>
+                <!-- Remove or replace the profile link -->
+                <!-- <a href="{{ url_for('auth.profile') }}" class="nav-button">Profile</a> -->
+
+                <!-- If you have a dashboard or home page, use that instead -->
+                <a href="/" class="nav-button">Dashboard</a>
+
                 <a href="{{ url_for('auth.logout') }}" class="nav-button">Logout</a>
             {% else %}
                 <a href="{{ url_for('auth.login') }}" class="nav-button">Login</a>
@@ -75,6 +80,20 @@
             {% endif %}
         </div>
     </header>
+
+    <!-- Add this just after the header and before the container div -->
+    <div class="container mt-3">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                        {{ message }}
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
 
     <div class="container pt-5">
         <h1 class="mb-4">Master Admin Dashboard</h1>
@@ -109,6 +128,9 @@
         <div class="card mb-4">
             <div class="card-header">
                 <h3>User Management</h3>
+                <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#createUserModal">
+                    <i class="bi bi-person-plus"></i> Create New User
+                </button>
             </div>
             <div class="card-body">
                 <div class="table-responsive">
@@ -161,6 +183,11 @@
                                             Demote
                                         </a>
                                         {% endif %}
+
+                                        <!-- Delete button that triggers modal -->
+                                        <button type="button" class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteUserModal{{ user.id }}">
+                                            <i class="bi bi-trash"></i> Delete
+                                        </button>
                                     </div>
                                     {% else %}
                                     <span class="text-muted">Current User</span>
@@ -177,6 +204,68 @@
         <!-- Additional sections for user activity, system stats, etc. could go here -->
 
     </div>
+
+    <!-- Create User Modal -->
+    <div class="modal fade" id="createUserModal" tabindex="-1" aria-labelledby="createUserModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="createUserModalLabel">Create New User</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form action="{{ url_for('auth.create_user') }}" method="post">
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="username" class="form-label">Username</label>
+                            <input type="text" class="form-control" id="username" name="username" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="email" class="form-label">Email</label>
+                            <input type="email" class="form-control" id="email" name="email" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Password</label>
+                            <input type="password" class="form-control" id="password" name="password" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="role" class="form-label">Role</label>
+                            <select class="form-select" id="role" name="role">
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                                <option value="master_admin">Master Admin</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-success">Create User</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete User Modals - One for each user -->
+    {% for user in users %}
+    <div class="modal fade" id="deleteUserModal{{ user.id }}" tabindex="-1" aria-labelledby="deleteUserModalLabel{{ user.id }}" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="deleteUserModalLabel{{ user.id }}">Confirm Delete</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to delete the user <strong>{{ user.username }}</strong>?</p>
+                    <p class="text-danger">This action cannot be undone.</p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <a href="{{ url_for('auth.delete_user', user_id=user.id) }}" class="btn btn-danger">Delete User</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
