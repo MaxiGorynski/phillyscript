@@ -202,21 +202,43 @@ def toggle_user(user_id):
 @auth.route('/master-admin')
 @master_admin_required
 def master_admin_dashboard():
+    # Get users and basic stats
     users = User.query.all()
-
-    # Calculate some basic stats
     user_count = User.query.count()
     active_users = User.query.filter_by(is_active=True).count()
     admin_count = User.query.filter(User.role.in_([UserRole.ADMIN.value, UserRole.MASTER_ADMIN.value])).count()
 
+    # Check if the model has the transcription fields by safely trying to access them
+    try:
+        # Try to access the field in the model (not instance)
+        transcription_field = User.total_transcription_minutes
+        has_fields = True
+    except:
+        has_fields = False
+
+    # Initialize stats
     stats = {
         'total_users': user_count,
         'active_users': active_users,
-        'admin_count': admin_count
+        'admin_count': admin_count,
+        'total_transcription_minutes': 0,
+        'monthly_transcription_minutes': 0,
+        'show_transcription': has_fields  # This is safer than using hasattr in template
     }
 
-    return render_template('master_admin_dashboard.html', users=users, stats=stats)
+    # Only try to calculate transcription stats if fields exist
+    if has_fields:
+        try:
+            from sqlalchemy import func
+            total_minutes = db.session.query(func.sum(User.total_transcription_minutes)).scalar() or 0
+            monthly_minutes = db.session.query(func.sum(User.current_month_transcription_minutes)).scalar() or 0
+            stats['total_transcription_minutes'] = total_minutes
+            stats['monthly_transcription_minutes'] = monthly_minutes
+        except:
+            # If there's any error, just keep the defaults
+            pass
 
+    return render_template('master_admin_dashboard.html', users=users, stats=stats)
 
 @auth.route('/master-admin/promote/<int:user_id>')
 @master_admin_required

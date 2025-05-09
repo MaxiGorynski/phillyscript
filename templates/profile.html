@@ -136,6 +136,16 @@
         </div>
         {% endif %}
 
+        <div class="card mb-4">
+            <div class="card-header">
+                <h3>Transcription Usage</h3>
+            </div>
+            <div class="card-body">
+                <p><strong>Total Transcription Time:</strong> {{ current_user.total_transcription_minutes|round(2) }} minutes</p>
+                <p><strong>This Month's Usage:</strong> {{ current_user.current_month_transcription_minutes|round(2) }} minutes</p>
+            </div>
+        </div>
+
         <div class="section">
             <h2>Account Information</h2>
             <div class="user-info">

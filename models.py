@@ -20,6 +20,9 @@ class User(UserMixin, db.Model):
     is_active = db.Column(db.Boolean, default=True)
     is_admin = db.Column(db.Boolean, default=False)  # Keeping for backwards compatibility
     role = db.Column(db.String(20), default=UserRole.USER.value)
+    total_transcription_minutes = db.Column(db.Float, default=0.0)
+    current_month_transcription_minutes = db.Column(db.Float, default=0.0)
+    last_usage_reset = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Additional fields for tracking
     last_login = db.Column(db.DateTime)

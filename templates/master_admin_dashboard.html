@@ -97,7 +97,6 @@
 
     <div class="container pt-5">
         <h1 class="mb-4">Master Admin Dashboard</h1>
-
         <div class="row mb-5">
             <div class="col-md-4">
                 <div class="card bg-primary text-white">
@@ -144,6 +143,10 @@
                                 <th>Created</th>
                                 <th>Last Login</th>
                                 <th>Login Count</th>
+                                {% if has_transcription_fields %}
+                                <th>Total Minutes</th>
+                                <th>Monthly Minutes</th>
+                                {% endif %}
                                 <th>Actions</th>
                             </tr>
                         </thead>
@@ -162,9 +165,27 @@
                                         {{ 'Active' if user.is_active else 'Inactive' }}
                                     </span>
                                 </td>
-                                <td>{{ user.created_at.strftime('%Y-%m-%d') }}</td>
+                                <td>{{ user.created_at.strftime('%Y-%m-%d') if user.created_at else 'N/A' }}</td>
                                 <td>{{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'Never' }}</td>
                                 <td>{{ user.login_count }}</td>
+
+                                {% if stats.show_transcription %}
+                                <td>
+                                    {% if user.total_transcription_minutes is defined %}
+                                        {{ "%.2f"|format(user.total_transcription_minutes or 0) }}
+                                    {% else %}
+                                        0.00
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if user.current_month_transcription_minutes is defined %}
+                                        {{ "%.2f"|format(user.current_month_transcription_minutes or 0) }}
+                                    {% else %}
+                                        0.00
+                                    {% endif %}
+                                </td>
+                                {% endif %}
+
                                 <td>
                                     {% if user.id != current_user.id %}
                                     <div class="btn-group">
@@ -200,6 +221,51 @@
                 </div>
             </div>
         </div>
+
+        <div class="col-md-4">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Total Users</h5>
+                    <h2 class="display-4">{{ stats.total_users }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Active Users</h5>
+                    <h2 class="display-4">{{ stats.active_users }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Admin Users</h5>
+                    <h2 class="display-4">{{ stats.admin_count }}</h2>
+                </div>
+            </div>
+        </div>
+
+        {% if has_transcription_fields %}
+        <!-- Transcription stats cards -->
+        <div class="col-md-6 mt-3">
+            <div class="card bg-warning text-white">
+                <div class="card-body">
+                    <h5 class="card-title">Total Transcription Minutes</h5>
+                    <h2 class="display-4">{{ "%.2f"|format(stats.total_transcription_minutes) }}</h2>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mt-3">
+            <div class="card bg-secondary text-white">
+                <div class="card-body">
+                    <h5 class="card-title">This Month's Transcription Minutes</h5>
+                    <h2 class="display-4">{{ "%.2f"|format(stats.monthly_transcription_minutes) }}</h2>
+                </div>
+            </div>
+        </div>
+        {% endif %}
 
         <!-- Additional sections for user activity, system stats, etc. could go here -->
 

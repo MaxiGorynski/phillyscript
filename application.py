@@ -189,6 +189,9 @@ except Exception as e:
         username = db.Column(db.String(80), unique=True, nullable=False)
         email = db.Column(db.String(120), unique=True, nullable=False)
         is_active = db.Column(db.Boolean, default=True)
+        total_transcription_minutes = db.Column(db.Float, default=0.0)
+        current_month_transcription_minutes = db.Column(db.Float, default=0.0)
+        last_usage_reset = db.Column(db.DateTime, default=datetime.utcnow)
 
         def get_id(self):
             return str(self.id)
@@ -580,6 +583,7 @@ def process_uploaded_audio(file_path, original_filename):
         logging.error(f"Error processing audio {original_filename}: {str(e)}")
         return None, f"Error processing audio: {str(e)}"
 
+
 def transcribe_audio_optimized(audio_path):
     """
     Optimized version of transcribe_audio function with improved file path handling.
@@ -622,6 +626,24 @@ def transcribe_audio_optimized(audio_path):
                 print(f"Error converting audio: {e}")
                 return ""
 
+        # Calculate audio duration and update usage tracking
+        try:
+            from flask_login import current_user
+            # If the audio was loaded above, use it, otherwise load it now
+            if 'audio' not in locals():
+                audio = AudioSegment.from_file(str(audio_path))
+
+            duration_minutes = len(audio) / 60000  # Convert milliseconds to minutes
+            print(f"Audio duration: {duration_minutes:.2f} minutes")
+
+            # Only update usage if we're in a Flask request context with a logged-in user
+            if current_user and hasattr(current_user, 'id') and not current_user.is_anonymous:
+                update_transcription_usage(current_user.id, duration_minutes)
+                print(f"Updated transcription usage for user {current_user.id}")
+        except Exception as e:
+            print(f"Note: Could not update transcription usage: {str(e)}")
+            # Continue with transcription even if tracking fails
+
         # Verify WAV file exists and has content
         wav_path_obj = Path(wav_path)
         if not wav_path_obj.exists():
@@ -652,7 +674,6 @@ def transcribe_audio_optimized(audio_path):
             print(f"Transcription received. Length: {len(transcript)} characters")
             print(f"Transcript: {transcript[:200]}..." if len(transcript) > 200 else f"Transcript: {transcript}")
             return transcript.lower()
-            return transcript.lower()
     except sr.UnknownValueError:
         print(f"Could not understand audio in {audio_path}")
         return ""
@@ -671,6 +692,32 @@ def transcribe_audio_optimized(audio_path):
         except Exception as e:
             print(f"Error cleaning up temporary file: {e}")
 
+
+def update_transcription_usage(user_id, audio_duration_minutes):
+    user = User.query.get(user_id)
+    if not user:
+        return False
+
+    # Check if the model has the new attributes before using them
+    if not hasattr(user, 'total_transcription_minutes'):
+        print(f"Warning: User model doesn't have total_transcription_minutes attribute")
+        return False
+
+    # Update total usage
+    user.total_transcription_minutes += audio_duration_minutes
+
+    # Check if we need to reset the monthly counter
+    current_time = datetime.utcnow()
+    if user.last_usage_reset.month != current_time.month or user.last_usage_reset.year != current_time.year:
+        # It's a new month, reset the counter
+        user.current_month_transcription_minutes = audio_duration_minutes
+        user.last_usage_reset = current_time
+    else:
+        # Same month, just add to the counter
+        user.current_month_transcription_minutes += audio_duration_minutes
+
+    db.session.commit()
+    return True
 
 def format_text(text):
     """
