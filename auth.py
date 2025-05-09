@@ -300,7 +300,7 @@ def create_user():
     # Check if the current user has permission (is master admin)
     if not current_user.is_master_admin():
         flash('You do not have permission to create users.', 'danger')
-        return redirect(url_for('master_admin_dashboard'))
+        return redirect(url_for('auth.master_admin_dashboard'))
 
     # Get form data
     username = request.form.get('username')
@@ -311,16 +311,16 @@ def create_user():
     # Validate input
     if not all([username, email, password, role]):
         flash('All fields are required.', 'danger')
-        return redirect(url_for('master_admin_dashboard'))
+        return redirect(url_for('auth.master_admin_dashboard'))
 
     # Check if username or email already exists
     if User.query.filter_by(username=username).first():
         flash('Username already exists.', 'danger')
-        return redirect(url_for('master_admin_dashboard'))
+        return redirect(url_for('auth.master_admin_dashboard'))
 
     if User.query.filter_by(email=email).first():
         flash('Email already exists.', 'danger')
-        return redirect(url_for('master_admin_dashboard'))
+        return redirect(url_for('auth.master_admin_dashboard'))
 
     # Create new user
     new_user = User(
@@ -338,7 +338,7 @@ def create_user():
     db.session.commit()
 
     flash(f'User {username} created successfully.', 'success')
-    return redirect(url_for('master_admin_dashboard'))
+    return redirect(url_for('auth.master_admin_dashboard'))
 
 
 @auth.route('/delete_user/<int:user_id>', methods=['GET'])
@@ -365,4 +365,4 @@ def delete_user(user_id):
     db.session.commit()
 
     flash(f'User {username} has been deleted.', 'success')
-    return redirect(url_for('master_admin_dashboard'))
+    return redirect(url_for('auth.master_admin_dashboard'))

@@ -626,24 +626,6 @@ def transcribe_audio_optimized(audio_path):
                 print(f"Error converting audio: {e}")
                 return ""
 
-        # Calculate audio duration and update usage tracking
-        try:
-            from flask_login import current_user
-            # If the audio was loaded above, use it, otherwise load it now
-            if 'audio' not in locals():
-                audio = AudioSegment.from_file(str(audio_path))
-
-            duration_minutes = len(audio) / 60000  # Convert milliseconds to minutes
-            print(f"Audio duration: {duration_minutes:.2f} minutes")
-
-            # Only update usage if we're in a Flask request context with a logged-in user
-            if current_user and hasattr(current_user, 'id') and not current_user.is_anonymous:
-                update_transcription_usage(current_user.id, duration_minutes)
-                print(f"Updated transcription usage for user {current_user.id}")
-        except Exception as e:
-            print(f"Note: Could not update transcription usage: {str(e)}")
-            # Continue with transcription even if tracking fails
-
         # Verify WAV file exists and has content
         wav_path_obj = Path(wav_path)
         if not wav_path_obj.exists():
@@ -667,10 +649,10 @@ def transcribe_audio_optimized(audio_path):
             # Adjust for ambient noise to improve accuracy
             recognizer.adjust_for_ambient_noise(source, duration=0.5)
             # Record the audio with optimized parameters
-            audio = recognizer.record(source)
+            audio_data = recognizer.record(source)
 
             print("Sending to speech recognition service...")
-            transcript = recognizer.recognize_google(audio, language="en-US")
+            transcript = recognizer.recognize_google(audio_data, language="en-US")
             print(f"Transcription received. Length: {len(transcript)} characters")
             print(f"Transcript: {transcript[:200]}..." if len(transcript) > 200 else f"Transcript: {transcript}")
             return transcript.lower()
@@ -693,31 +675,79 @@ def transcribe_audio_optimized(audio_path):
             print(f"Error cleaning up temporary file: {e}")
 
 
-def update_transcription_usage(user_id, audio_duration_minutes):
-    user = User.query.get(user_id)
-    if not user:
+def track_transcription_usage(file_path, user_id=None):
+    """
+    Calculate audio duration and update the user's transcription usage statistics.
+    Args:
+        file_path: Path to the audio file
+        user_id: Optional user ID (if not provided, will try to get from current_user)
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Calculate audio duration
+        audio = AudioSegment.from_file(str(file_path))
+        duration_minutes = len(audio) / 60000  # Convert milliseconds to minutes
+        print(f"Audio duration: {duration_minutes:.2f} minutes")
+
+        # Get user ID if not provided
+        if user_id is None:
+            try:
+                from flask_login import current_user
+                from flask import has_request_context
+
+                if has_request_context() and current_user and not current_user.is_anonymous:
+                    user_id = current_user.id
+                else:
+                    print("No user context available for usage tracking")
+                    return False
+            except Exception as e:
+                print(f"Error getting current user: {str(e)}")
+                return False
+
+        # Now get the user and update stats
+        user = User.query.get(user_id)
+        if not user:
+            print(f"User with ID {user_id} not found")
+            return False
+
+        # Check if user model has the required attributes
+        required_attrs = ['total_transcription_minutes', 'current_month_transcription_minutes', 'last_usage_reset']
+        for attr in required_attrs:
+            if not hasattr(user, attr):
+                print(f"User model missing attribute: {attr}")
+                return False
+
+        # Update total usage
+        user.total_transcription_minutes += duration_minutes
+
+        # Check if we need to reset the monthly counter
+        current_time = datetime.utcnow()
+        if not user.last_usage_reset or user.last_usage_reset.month != current_time.month or user.last_usage_reset.year != current_time.year:
+            # New month - reset counter
+            user.current_month_transcription_minutes = duration_minutes
+            user.last_usage_reset = current_time
+        else:
+            # Same month - add to counter
+            user.current_month_transcription_minutes += duration_minutes
+
+        # Commit changes safely
+        try:
+            db.session.commit()
+            print(f"Updated usage for user {user_id}: added {duration_minutes:.2f} minutes")
+            return True
+        except Exception as e:
+            db.session.rollback()
+            print(f"Database error updating usage: {str(e)}")
+            return False
+
+    except Exception as e:
+        print(f"Error tracking transcription usage: {str(e)}")
+        try:
+            db.session.rollback()
+        except:
+            pass
         return False
-
-    # Check if the model has the new attributes before using them
-    if not hasattr(user, 'total_transcription_minutes'):
-        print(f"Warning: User model doesn't have total_transcription_minutes attribute")
-        return False
-
-    # Update total usage
-    user.total_transcription_minutes += audio_duration_minutes
-
-    # Check if we need to reset the monthly counter
-    current_time = datetime.utcnow()
-    if user.last_usage_reset.month != current_time.month or user.last_usage_reset.year != current_time.year:
-        # It's a new month, reset the counter
-        user.current_month_transcription_minutes = audio_duration_minutes
-        user.last_usage_reset = current_time
-    else:
-        # Same month, just add to the counter
-        user.current_month_transcription_minutes += audio_duration_minutes
-
-    db.session.commit()
-    return True
 
 def format_text(text):
     """
@@ -1111,6 +1141,7 @@ def process_transcript(transcript):
 
 import csv
 
+
 def process_audio_file(file_path, original_filename):
     """Process audio file with enhanced GPT correction."""
     # Get original transcription
@@ -1137,8 +1168,10 @@ def process_audio_file(file_path, original_filename):
     output_path = TRANSCRIPT_FOLDER / output_filename
 
     # Save to CSV - without using csv.QUOTE_ALL to avoid the error
-    # Just use the default pandas settings
     df.to_csv(output_path, index=False)
+
+    # Track usage AFTER successful CSV generation
+    track_transcription_usage(file_path)  # Single function handles everything
 
     return output_path, None
 
@@ -1171,6 +1204,10 @@ def process_audio_file_alt(file_path, original_filename):
 
     # Save to CSV - use pandas built-in quoting option instead of csv.QUOTE_ALL
     df.to_csv(output_path, index=False, quoting=1)  # 1 is equivalent to csv.QUOTE_ALL
+
+    # Track usage AFTER successful CSV generation
+    # This uses the new consolidated function
+    track_transcription_usage(file_path)
 
     return output_path, None
 
