@@ -33,7 +33,7 @@ database_url = os.environ.get('DATABASE_URL')
 logger.info(f"Database URL from environment: {database_url}")
 
 # Determine which database to use
-if not database_url or 'rds.amazonaws.com' in database_url:
+if not database_url:
     fallback_db = 'sqlite:///fallback.db'
     logger.warning(f"Using fallback database: {fallback_db}")
     application.config['SQLALCHEMY_DATABASE_URI'] = fallback_db
@@ -189,6 +189,9 @@ except Exception as e:
         username = db.Column(db.String(80), unique=True, nullable=False)
         email = db.Column(db.String(120), unique=True, nullable=False)
         is_active = db.Column(db.Boolean, default=True)
+        total_transcription_minutes = db.Column(db.Float, default=0.0)
+        current_month_transcription_minutes = db.Column(db.Float, default=0.0)
+        last_usage_reset = db.Column(db.DateTime, default=datetime.utcnow)
 
         def get_id(self):
             return str(self.id)
@@ -233,6 +236,8 @@ import cv2
 import numpy as np
 import re
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash
+import psycopg2
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
@@ -578,6 +583,7 @@ def process_uploaded_audio(file_path, original_filename):
         logging.error(f"Error processing audio {original_filename}: {str(e)}")
         return None, f"Error processing audio: {str(e)}"
 
+
 def transcribe_audio_optimized(audio_path):
     """
     Optimized version of transcribe_audio function with improved file path handling.
@@ -643,13 +649,12 @@ def transcribe_audio_optimized(audio_path):
             # Adjust for ambient noise to improve accuracy
             recognizer.adjust_for_ambient_noise(source, duration=0.5)
             # Record the audio with optimized parameters
-            audio = recognizer.record(source)
+            audio_data = recognizer.record(source)
 
             print("Sending to speech recognition service...")
-            transcript = recognizer.recognize_google(audio, language="en-US")
+            transcript = recognizer.recognize_google(audio_data, language="en-US")
             print(f"Transcription received. Length: {len(transcript)} characters")
             print(f"Transcript: {transcript[:200]}..." if len(transcript) > 200 else f"Transcript: {transcript}")
-            return transcript.lower()
             return transcript.lower()
     except sr.UnknownValueError:
         print(f"Could not understand audio in {audio_path}")
@@ -659,6 +664,8 @@ def transcribe_audio_optimized(audio_path):
         return ""
     except Exception as e:
         print(f"Unexpected error processing audio: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
     finally:
         # Clean up temporary WAV file if it was converted
@@ -669,6 +676,80 @@ def transcribe_audio_optimized(audio_path):
         except Exception as e:
             print(f"Error cleaning up temporary file: {e}")
 
+
+def track_transcription_usage(file_path, user_id=None):
+    """
+    Calculate audio duration and update the user's transcription usage statistics.
+    Args:
+        file_path: Path to the audio file
+        user_id: Optional user ID (if not provided, will try to get from current_user)
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Calculate audio duration
+        audio = AudioSegment.from_file(str(file_path))
+        duration_minutes = len(audio) / 60000  # Convert milliseconds to minutes
+        print(f"Audio duration: {duration_minutes:.2f} minutes")
+
+        # Get user ID if not provided
+        if user_id is None:
+            try:
+                from flask_login import current_user
+                from flask import has_request_context
+
+                if has_request_context() and current_user and not current_user.is_anonymous:
+                    user_id = current_user.id
+                else:
+                    print("No user context available for usage tracking")
+                    return False
+            except Exception as e:
+                print(f"Error getting current user: {str(e)}")
+                return False
+
+        # Now get the user and update stats
+        user = User.query.get(user_id)
+        if not user:
+            print(f"User with ID {user_id} not found")
+            return False
+
+        # Check if user model has the required attributes
+        required_attrs = ['total_transcription_minutes', 'current_month_transcription_minutes', 'last_usage_reset']
+        for attr in required_attrs:
+            if not hasattr(user, attr):
+                print(f"User model missing attribute: {attr}")
+                return False
+
+        # Update total usage
+        user.total_transcription_minutes += duration_minutes
+
+        # Check if we need to reset the monthly counter
+        current_time = datetime.utcnow()
+        if not user.last_usage_reset or user.last_usage_reset.month != current_time.month or user.last_usage_reset.year != current_time.year:
+            # New month - reset counter
+            user.current_month_transcription_minutes = duration_minutes
+            user.last_usage_reset = current_time
+        else:
+            # Same month - add to counter
+            user.current_month_transcription_minutes += duration_minutes
+
+        # Commit changes safely
+        try:
+            db.session.commit()
+            print(f"Updated usage for user {user_id}: added {duration_minutes:.2f} minutes")
+            return True
+        except Exception as e:
+            db.session.rollback()
+            print(f"Database error updating usage: {str(e)}")
+            return False
+
+    except Exception as e:
+        print(f"Error tracking transcription usage: {str(e)}")
+        try:
+            db.session.rollback()
+        except:
+            pass
+        return False
 
 def format_text(text):
     """
@@ -806,6 +887,9 @@ def correct_transcript_with_gpt(transcript):
         # Skip processing if transcript is empty
         if not transcript:
             return transcript
+
+        print(f"Starting GPT correction of transcript...")
+        start_time = time.time()
 
         # Log the original transcript for debugging
         logging.info(f"Original transcript: {transcript}")
@@ -1062,6 +1146,7 @@ def process_transcript(transcript):
 
 import csv
 
+
 def process_audio_file(file_path, original_filename):
     """Process audio file with enhanced GPT correction."""
     # Get original transcription
@@ -1088,8 +1173,10 @@ def process_audio_file(file_path, original_filename):
     output_path = TRANSCRIPT_FOLDER / output_filename
 
     # Save to CSV - without using csv.QUOTE_ALL to avoid the error
-    # Just use the default pandas settings
     df.to_csv(output_path, index=False)
+
+    # Track usage AFTER successful CSV generation
+    #track_transcription_usage(file_path)  # Single function handles everything
 
     return output_path, None
 
@@ -1122,6 +1209,10 @@ def process_audio_file_alt(file_path, original_filename):
 
     # Save to CSV - use pandas built-in quoting option instead of csv.QUOTE_ALL
     df.to_csv(output_path, index=False, quoting=1)  # 1 is equivalent to csv.QUOTE_ALL
+
+    # Track usage AFTER successful CSV generation
+    # This uses the new consolidated function
+    #track_transcription_usage(file_path)
 
     return output_path, None
 
@@ -2687,6 +2778,47 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
 
     return result_path
 
+'''Admin Functions'''
+
+@app.route('/test_outbound')
+def test_outbound():
+    import requests
+    try:
+        response = requests.get('https://speech.googleapis.com/v1/speech', timeout=5)
+        return f"Outbound connectivity test: {response.status_code}"
+    except Exception as e:
+        return f"Outbound connectivity test failed: {str(e)}"
+
+@application.route('/test_google')
+def test_google():
+    import urllib.request
+    import socket
+    try:
+        socket.setdefaulttimeout(5)
+        response = urllib.request.urlopen('https://www.google.com')
+        return f"Connection successful! Status code: {response.getcode()}"
+    except Exception as e:
+        return f"Connection failed: {str(e)}"
+
+@app.route('/init_db', methods=['GET'])
+def init_db():
+    try:
+        # Create admin user if it doesn't exist
+        admin_user = User.query.filter_by(username='admin').first()
+        if not admin_user:
+            admin_user = User(
+                username='admin',
+                email='admin@example.com',
+                role='master_admin'
+            )
+            admin_user.set_password('changeme123')
+            db.session.add(admin_user)
+            db.session.commit()
+            return 'Admin user created successfully!'
+        else:
+            return 'Admin user already exists!'
+    except Exception as e:
+        return f'Error: {str(e)}'
 
 @application.route('/debug_environment')
 @login_required
@@ -2758,7 +2890,7 @@ if __name__ == '__main__':
     num_threads = min(multiprocessing.cpu_count() * 2, 8)  # Use 2x CPU cores, max 8
 
     # Get port from environment or use 8080 as default for App Runner
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 8080))
 
     print(f"Starting PhillyScript server with {num_threads} worker threads on port {port}...")
     print("Available routes:")

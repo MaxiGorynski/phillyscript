@@ -1,5 +1,3 @@
-import traceback
-
 from flask import Flask, request, render_template, send_file, jsonify, send_from_directory
 import os
 import uuid
@@ -10,12 +8,9 @@ from io import BytesIO
 import logging
 import shutil
 import openai
-import httpx
 import time
 import tempfile
 import subprocess
-import concurrent.futures
-from datetime import datetime
 
 # Configure logging first - increase level to see more details
 logging.basicConfig(level=logging.INFO,
@@ -29,80 +24,58 @@ app = application  # AWS ElasticBeanstalk looks for 'application' while Flask CL
 # Configure app before importing other modules
 application.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-key-for-local-only')
 
-def create_openai_client():
-    """
-    Create an OpenAI client with explicit HTTP/1.1 configuration
-    to resolve AppRunner connectivity issues.
-    """
-    # Create a custom HTTPX client with HTTP/1.1 explicitly set
-    http_client = httpx.Client(
-        http1=True,  # Force HTTP/1.1
-        http2=False,  # Disable HTTP/2
-        verify=True,  # SSL verification
-        timeout=30.0  # Generous timeout
-    )
+client = openai.OpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY")
+)
 
-    # Initialize OpenAI client with the custom HTTP client
-    client = openai.OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),
-        http_client=http_client
-    )
+# Set up S3 availability check
+S3_AVAILABLE = False
+try:
+    import boto3
 
-    return client
+    S3_AVAILABLE = True
+except ImportError:
+    logger.warning("boto3 not available, S3 integration will be disabled")
 
-# Global client initialization
-client = create_openai_client()
+# Define SQLite database path
+SQLITE_DB_FILE = 'phillyscript.db'
+SQLITE_DB_URI = f'sqlite:///{SQLITE_DB_FILE}'
 
-# Get DATABASE_URL from environment, with a SQLite fallback
+# Check if we should force SQLite mode regardless of DATABASE_URL
+FORCE_SQLITE = os.environ.get('FORCE_SQLITE', 'false').lower() == 'true'
+
+# Database configuration - prioritize SQLite
 database_url = os.environ.get('DATABASE_URL')
 logger.info(f"Database URL from environment: {database_url}")
 
-# Determine which database to use
-if not database_url:
-    fallback_db = 'sqlite:///fallback.db'
-    logger.warning(f"Using fallback database: {fallback_db}")
-    application.config['SQLALCHEMY_DATABASE_URI'] = fallback_db
+if FORCE_SQLITE or not database_url:
+    logger.info(f"Using SQLite database: {SQLITE_DB_URI}")
+    application.config['SQLALCHEMY_DATABASE_URI'] = SQLITE_DB_URI
+
+    # Try to download latest SQLite DB from S3
+    if S3_AVAILABLE:
+        try:
+            s3_bucket = os.environ.get('S3_BUCKET')
+            if s3_bucket:
+                s3 = boto3.client('s3')
+                s3.download_file(s3_bucket, f'db_backup/{SQLITE_DB_FILE}', SQLITE_DB_FILE)
+                logger.info(f"Downloaded database from S3: {SQLITE_DB_FILE}")
+        except Exception as e:
+            logger.warning(f"Could not download database from S3: {str(e)}")
 else:
+    logger.info(f"Using PostgreSQL database")
     application.config['SQLALCHEMY_DATABASE_URI'] = database_url
 
-# Now that the database URI is set, we can try to download from S3 if it's SQLite
-if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-    s3_bucket = os.environ.get('S3_BUCKET', 'your-backup-bucket-name')
-
-    try:
-        # Download DB from S3 if it exists
-        s3 = boto3.client('s3')
-        s3.download_file(s3_bucket, 'db_backup/' + os.path.basename(db_file), db_file)
-        logger.info(f"Downloaded database from S3: {db_file}")
-    except Exception as e:
-        logger.warning(f"Could not download database from S3: {str(e)}")
-
-# Define backup function to be used later
-def backup_db_to_s3():
-    if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-        db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-        s3_bucket = os.environ.get('S3_BUCKET', 'your-backup-bucket-name')
-
-        try:
-            # Upload DB to S3
-            s3 = boto3.client('s3')
-            s3.upload_file(db_file, s3_bucket, 'db_backup/' + os.path.basename(db_file))
-            logger.info(f"Backed up database to S3: {db_file}")
-        except Exception as e:
-            logger.warning(f"Could not back up database to S3: {str(e)}")
-
+# Database configuration options
 application.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 application.config['TEMPLATES_AUTO_RELOAD'] = True
 
-# Database configuration needs to be engine-specific
+# Set engine-specific options
 if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-    # SQLite-specific options
     application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'connect_args': {'check_same_thread': False}
     }
 else:
-    # PostgreSQL-specific options
     application.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
         'pool_recycle': 280,
         'pool_timeout': 10,
@@ -114,41 +87,52 @@ else:
 # Log the database we're connecting to
 logger.info(f"Configured database: {application.config['SQLALCHEMY_DATABASE_URI']}")
 
-S3_AVAILABLE = False
 
-try:
-    import boto3
-    S3_AVAILABLE = True
-except ImportError:
-    logger.warning("boto3 not available, S3 integration will be disabled")
-
-
+# Consolidated backup function with better error handling
 def backup_db_to_s3():
+    """Backup SQLite database to S3"""
     if not S3_AVAILABLE:
         logger.warning("S3 not available, skipping backup")
         return False
 
-    if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
-        db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
-        s3_bucket = os.environ.get('S3_BUCKET')
+    if not application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+        logger.info("Not using SQLite, no backup needed")
+        return False
 
-        if not s3_bucket:
-            logger.warning("S3_BUCKET not set, skipping backup")
-            return False
+    db_file = application.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+    s3_bucket = os.environ.get('S3_BUCKET')
 
-        try:
-            # Upload DB to S3
-            s3 = boto3.client('s3')
-            s3.upload_file(db_file, s3_bucket, 'db_backup/' + os.path.basename(db_file))
-            logger.info(f"Backed up database to S3: {db_file}")
-            return True
-        except Exception as e:
-            logger.warning(f"Could not back up database to S3: {str(e)}")
-            return False
-    return False
+    if not s3_bucket:
+        logger.warning("S3_BUCKET not set, skipping backup")
+        return False
+
+    try:
+        # Upload DB to S3
+        s3 = boto3.client('s3')
+        s3.upload_file(db_file, s3_bucket, f'db_backup/{os.path.basename(db_file)}')
+        logger.info(f"Backed up database to S3: {db_file}")
+        return True
+    except Exception as e:
+        logger.warning(f"Could not back up database to S3: {str(e)}")
+        return False
+
 
 # Make backup function available globally
 application.backup_db_to_s3 = backup_db_to_s3
+
+# Schedule regular backups if using SQLite
+if application.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite'):
+    # Store last backup time on app
+    application.last_backup_time = time.time()
+
+
+    @application.before_request
+    def check_backup_schedule():
+        # Backup every hour (3600 seconds)
+        current_time = time.time()
+        if hasattr(application, 'last_backup_time') and (current_time - application.last_backup_time) > 3600:
+            if application.backup_db_to_s3():
+                application.last_backup_time = current_time
 
 # Import db and login_manager from extensions
 from extensions import db, login_manager
@@ -268,6 +252,7 @@ from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
 import difflib
 from docx import Document
+from datetime import datetime
 from flask_login import login_required, current_user
 
 
@@ -610,11 +595,12 @@ def process_uploaded_audio(file_path, original_filename):
 
 def transcribe_audio_optimized(audio_path):
     """
-    Optimized version that preserves structure markers in audio transcription.
-    Prioritizes structure over speed.
+    Optimized version that processes audio in chunks to prevent timeouts.
     """
+    import concurrent.futures  # Add this import
+
     try:
-        print(f"Processing {audio_path} for transcription...")
+        print(f"Converting {audio_path} to WAV format...")
         audio_path = Path(audio_path)
 
         # Verify file exists
@@ -622,248 +608,113 @@ def transcribe_audio_optimized(audio_path):
             print(f"Error: File does not exist: {audio_path}")
             return ""
 
-        # Convert audio to WAV format with good quality for recognition
-        wav_path = audio_path.with_suffix('.wav')
-        if audio_path.suffix.lower() != '.wav':
+        # Skip conversion for WAV files
+        if audio_path.suffix.lower() == '.wav':
+            wav_path = str(audio_path)
+        else:
+            # Create a temporary WAV file with optimized parameters
+            wav_path = audio_path.with_suffix('.wav')
+
+            # Convert audio to WAV with optimized parameters
             try:
-                audio = AudioSegment.from_file(str(audio_path))
-                # Use higher quality settings for better accuracy
+                if audio_path.suffix.lower() == '.mp3':
+                    audio = AudioSegment.from_mp3(str(audio_path))
+                elif audio_path.suffix.lower() == '.flac':
+                    audio = AudioSegment.from_file(str(audio_path), format="flac")
+                elif audio_path.suffix.lower() == '.m4a':
+                    audio = AudioSegment.from_file(str(audio_path), format="m4a")
+                else:
+                    audio = AudioSegment.from_file(str(audio_path))
+
+                # Optimize audio for speech recognition
+                # Downsampling to 16kHz, mono, 16-bit which is optimal for most speech recognition
                 audio = audio.set_frame_rate(16000).set_channels(1)
-                audio.export(wav_path, format="wav")
+
+                # Export with optimized settings
+                audio.export(wav_path, format="wav", parameters=["-q:a", "0"])
                 print(f"Successfully converted to {wav_path}")
             except Exception as e:
                 print(f"Error converting audio: {e}")
                 return ""
-        else:
-            wav_path = str(audio_path)
+
+        # Verify WAV file exists and has content
+        wav_path_obj = Path(wav_path)
+        if not wav_path_obj.exists():
+            print(f"Error: WAV file does not exist: {wav_path}")
+            return ""
+
+        if wav_path_obj.stat().st_size == 0:
+            print(f"Error: WAV file is empty: {wav_path}")
+            return ""
 
         # Get audio duration
         audio_segment = AudioSegment.from_file(str(wav_path))
         duration_seconds = len(audio_segment) / 1000.0
         print(f"Audio duration: {duration_seconds:.2f} seconds")
 
-        # CRITICAL CHANGE: Try to transcribe the entire audio first
-        # This gives the best chance of preserving all markers
-        try:
-            print("Attempting full audio transcription without chunking...")
-            recognizer = sr.Recognizer()
+        # Process in chunks if longer than 10 seconds
+        if duration_seconds > 10:
+            return process_audio_in_chunks(wav_path, audio_segment)
 
-            with sr.AudioFile(str(wav_path)) as source:
-                audio_data = recognizer.record(source)
-
-                # Try with a longer timeout for the entire file
-                try:
-                    import signal
-
-                    def handler(signum, frame):
-                        raise TimeoutError("Full transcription timed out")
-
-                    # Set a generous timeout based on audio length
-                    timeout_seconds = min(30, max(10, int(duration_seconds * 0.5)))
-                    print(f"Setting timeout of {timeout_seconds} seconds for full transcription")
-
-                    signal.signal(signal.SIGALRM, handler)
-                    signal.alarm(timeout_seconds)
-
-                    transcript = recognizer.recognize_google(audio_data, language="en-US")
-
-                    # Clear the alarm
-                    signal.alarm(0)
-
-                    print("Full transcription successful!")
-                    print(f"Transcript length: {len(transcript)} characters")
-
-                    # If successful, return the full transcript
-                    return transcript.lower()
-
-                except TimeoutError:
-                    print("Full transcription timed out, falling back to chunking")
-                    signal.alarm(0)  # Clear the alarm
-                except Exception as e:
-                    print(f"Error in full transcription: {e}")
-                    signal.alarm(0)  # Clear the alarm
-        except Exception as e:
-            print(f"Error attempting full transcription: {e}")
-
-        # If we reach here, full transcription failed - try larger, overlapping chunks
-        print("Using overlapping chunks for transcription...")
-
-        # Use larger chunks with overlap to avoid splitting markers
-        chunk_size_ms = 15000  # 15 seconds
-        overlap_ms = 5000  # 5 second overlap
-
-        # Calculate actual chunks with overlap
-        chunks = []
-        for start_ms in range(0, len(audio_segment), chunk_size_ms - overlap_ms):
-            end_ms = min(start_ms + chunk_size_ms, len(audio_segment))
-            chunks.append((start_ms, end_ms))
-
-        print(f"Processing audio in {len(chunks)} overlapping chunks")
-
-        # Process each chunk
-        all_transcripts = []
+        # For shorter audio, use standard approach
+        print("Starting transcription...")
         recognizer = sr.Recognizer()
 
-        for i, (start_ms, end_ms) in enumerate(chunks):
-            # Extract chunk with overlap
-            chunk = audio_segment[start_ms:end_ms]
+        # Set recognition parameters for better performance
+        recognizer.energy_threshold = 300
+        recognizer.dynamic_energy_threshold = True
+        recognizer.pause_threshold = 0.8
 
-            # Export chunk to temporary file
-            chunk_path = f"/tmp/chunk_{i}.wav"
-            chunk.export(chunk_path, format="wav")
+        with sr.AudioFile(str(wav_path)) as source:
+            print("Reading audio file...")
+            # Adjust for ambient noise to improve accuracy
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            # Record the audio with optimized parameters
+            audio_data = recognizer.record(source)
 
-            print(f"Processing chunk {i + 1}/{len(chunks)}...")
+            print("Sending to speech recognition service...")
 
+            # Try with timeout
             try:
-                with sr.AudioFile(chunk_path) as source:
-                    audio_data = recognizer.record(source)
-
-                    # Use timeout to prevent hanging
-                    import signal
-
-                    def handler(signum, frame):
-                        raise TimeoutError("Chunk processing timed out")
-
-                    # Set timeout proportional to chunk size
-                    timeout_sec = min(10, int((end_ms - start_ms) / 1000 * 0.8))
-                    signal.signal(signal.SIGALRM, handler)
-                    signal.alarm(timeout_sec)
-
-                    try:
-                        transcript = recognizer.recognize_google(audio_data, language="en-US")
-                        all_transcripts.append(transcript)
-                        signal.alarm(0)  # Clear the alarm
-                        print(f"Chunk {i + 1}/{len(chunks)} transcribed successfully")
-                    except TimeoutError:
-                        print(f"Chunk {i + 1}/{len(chunks)} timed out")
-                        signal.alarm(0)  # Clear the alarm
-                        all_transcripts.append("")
-                    except Exception as e:
-                        print(f"Error with chunk {i + 1}: {e}")
-                        signal.alarm(0)  # Clear the alarm
-                        all_transcripts.append("")
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(recognizer.recognize_google, audio_data, language="en-US")
+                    transcript = future.result(timeout=10)  # 10 second timeout
+                print(f"Transcription received. Length: {len(transcript)} characters")
+                print(f"Transcript: {transcript[:200]}..." if len(transcript) > 200 else f"Transcript: {transcript}")
+                return transcript.lower()
+            except concurrent.futures.TimeoutError:
+                print("Transcription timed out")
+                return ""
             except Exception as e:
-                print(f"Error processing chunk {i + 1}: {e}")
-            finally:
-                # Clean up chunk file
-                try:
-                    os.remove(chunk_path)
-                except:
-                    pass
-
-        # Combine all transcripts into a single string
-        raw_transcript = " ".join(all_transcripts).lower()
-
-        # CRITICAL STEP: Process the raw transcript to ensure markers are preserved
-        # This is where we clean up and ensure our special markers are correctly identified
-        processed_transcript = fix_transcript_markers(raw_transcript)
-
-        return processed_transcript
-
+                print(f"Error in transcription: {e}")
+                return ""
     except Exception as e:
-        print(f"Transcription error: {e}")
+        print(f"Unexpected error processing audio: {e}")
         import traceback
         traceback.print_exc()
         return ""
     finally:
-        # Clean up temporary WAV file
-        if 'wav_path' in locals() and wav_path != str(audio_path) and Path(wav_path).exists():
-            try:
+        # Clean up temporary WAV file if it was converted
+        try:
+            if 'wav_path' in locals() and wav_path != str(audio_path) and Path(wav_path).exists():
                 Path(wav_path).unlink(missing_ok=True)
                 print("Cleaned up temporary WAV file")
-            except:
-                pass
-
-
-def fix_transcript_markers(transcript):
-    """
-    Carefully process the transcript to ensure structure markers are correctly identified.
-    This is critical for proper CSV structure.
-    """
-    # Lower case for consistent processing
-    transcript = transcript.lower()
-
-    # Fix common speech recognition errors in markers
-    marker_corrections = {
-        # "new room" variations
-        r'\bnew\s*rum\b': 'new room',
-        r'\bnew\s*rome\b': 'new room',
-        r'\bnew\s*rooms\b': 'new room',
-        r'\bnew\s*rom\b': 'new room',
-        r'\bnu\s*room\b': 'new room',
-
-        # "new attribute" variations
-        r'\bnew\s*attribute\b': 'new attribute',
-        r'\bnew\s*attributes\b': 'new attribute',
-        r'\bnew\s*attributed\b': 'new attribute',
-        r'\bnew\s*tribute\b': 'new attribute',
-
-        # "new feature" variations
-        r'\bnew\s*feature\b': 'new feature',
-        r'\bnew\s*features\b': 'new feature',
-        r'\bnew\s*featured\b': 'new feature',
-        r'\bnew\s*creature\b': 'new feature',
-
-        # "comment" variations
-        r'\bcomment\b': 'comment',
-        r'\bcomments\b': 'comment',
-        r'\bcomet\b': 'comment',
-        r'\bcoming\b': 'comment'
-    }
-
-    # Apply corrections to fix misheard markers
-    for pattern, replacement in marker_corrections.items():
-        transcript = re.sub(pattern, replacement, transcript)
-
-    # Ensure spaces around markers for better detection
-    transcript = re.sub(r'(new room|new attribute|new feature|comment)', r' \1 ', transcript)
-
-    # Clean up excess whitespace
-    transcript = re.sub(r'\s+', ' ', transcript).strip()
-
-    # Split into words and rebuild transcript carefully
-    words = transcript.split()
-    processed_words = []
-
-    # Track special markers
-    i = 0
-    while i < len(words):
-        if i < len(words) - 1 and words[i] == 'new' and words[i + 1] in ['room', 'attribute', 'feature']:
-            # Found a marker like "new room", "new attribute", "new feature"
-            processed_words.append(f"\n{words[i]} {words[i + 1]}")
-            i += 2
-        elif words[i] == 'comment':
-            # Found a "comment" marker
-            processed_words.append(f"\ncomment")
-            i += 1
-        else:
-            # Regular word
-            processed_words.append(words[i])
-            i += 1
-
-    # Join back into a clean transcript with line breaks at markers
-    processed_transcript = " ".join(processed_words)
-
-    # Clean up any excess spaces
-    processed_transcript = re.sub(r'\s+', ' ', processed_transcript)
-
-    # Ensure markers are at line starts
-    processed_transcript = re.sub(r' (new room|new attribute|new feature|comment)', r'\n\1', processed_transcript)
-
-    # Remove any empty lines
-    lines = [line.strip() for line in processed_transcript.split('\n') if line.strip()]
-    processed_transcript = '\n'.join(lines)
-
-    print(f"Processed transcript structure: {len(lines)} lines with markers")
-
-    return processed_transcript
+        except Exception as e:
+            print(f"Error cleaning up temporary file: {e}")
 
 
 def process_audio_in_chunks(wav_path, audio_segment=None):
     """
     Process longer audio files in chunks to avoid timeouts.
+
+    Args:
+        wav_path: Path to the WAV file
+        audio_segment: Optional pre-loaded AudioSegment
+
+    Returns:
+        Concatenated transcript from all chunks
     """
-    import concurrent.futures  # Explicit import here as well
+    import concurrent.futures  # Add this import
 
     if audio_segment is None:
         audio_segment = AudioSegment.from_file(str(wav_path))
@@ -879,9 +730,6 @@ def process_audio_in_chunks(wav_path, audio_segment=None):
 
     # Initialize recognizer
     recognizer = sr.Recognizer()
-    recognizer.energy_threshold = 300
-    recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8
 
     # Process each chunk
     all_transcripts = []
@@ -904,18 +752,19 @@ def process_audio_in_chunks(wav_path, audio_segment=None):
                 audio_data = recognizer.record(source)
 
                 try:
-                    # Use a short timeout for each chunk to prevent worker timeouts
                     with concurrent.futures.ThreadPoolExecutor() as executor:
                         future = executor.submit(recognizer.recognize_google, audio_data, language="en-US")
-                        transcript = future.result(timeout=5)  # 5 second timeout per chunk
+                        transcript = future.result(timeout=5)  # 5 second timeout
                     print(f"Chunk {i + 1}/{num_chunks} transcribed successfully")
                     all_transcripts.append(transcript)
                 except concurrent.futures.TimeoutError:
                     print(f"Chunk {i + 1}/{num_chunks} timed out")
-                    all_transcripts.append("")  # Add blank for timed out chunk
+                except sr.UnknownValueError:
+                    print(f"No speech detected in chunk {i + 1}/{num_chunks}")
+                except sr.RequestError as e:
+                    print(f"API error for chunk {i + 1}/{num_chunks}: {e}")
                 except Exception as e:
                     print(f"Error processing chunk {i + 1}: {e}")
-                    all_transcripts.append("")  # Add blank for failed chunk
         except Exception as e:
             print(f"Error processing chunk {i + 1}: {e}")
         finally:
@@ -1403,10 +1252,7 @@ import csv
 
 
 def process_audio_file(file_path, original_filename):
-    """
-    Process audio file with enhanced GPT correction.
-    Consolidated version of previous duplicated functions.
-    """
+    """Process audio file with enhanced GPT correction."""
     # Get original transcription
     transcript = transcribe_audio_optimized(file_path)
 
@@ -1430,8 +1276,47 @@ def process_audio_file(file_path, original_filename):
     output_filename = f"{base_filename}_transcript.csv"
     output_path = TRANSCRIPT_FOLDER / output_filename
 
-    # Save to CSV with consistent quoting
+    # Save to CSV - without using csv.QUOTE_ALL to avoid the error
+    df.to_csv(output_path, index=False)
+
+    # Track usage AFTER successful CSV generation
+    #track_transcription_usage(file_path)  # Single function handles everything
+
+    return output_path, None
+
+# If you want to keep the quoting behavior but don't want to add the import,
+# you can use this alternative:
+def process_audio_file_alt(file_path, original_filename):
+    """Process audio file with enhanced GPT correction."""
+    # Get original transcription
+    transcript = transcribe_audio_optimized(file_path)
+
+    if not transcript:
+        return None, "Failed to transcribe audio"
+
+    # Apply GPT correction
+    corrected_transcript = correct_transcript_with_gpt(transcript)
+
+    # Process the corrected transcript
+    results = process_transcript(corrected_transcript)
+
+    if not results:
+        return None, "No features found in the transcript"
+
+    # Create DataFrame
+    df = pd.DataFrame(results)
+
+    # Generate output filename
+    base_filename = Path(original_filename).stem
+    output_filename = f"{base_filename}_transcript.csv"
+    output_path = TRANSCRIPT_FOLDER / output_filename
+
+    # Save to CSV - use pandas built-in quoting option instead of csv.QUOTE_ALL
     df.to_csv(output_path, index=False, quoting=1)  # 1 is equivalent to csv.QUOTE_ALL
+
+    # Track usage AFTER successful CSV generation
+    # This uses the new consolidated function
+    #track_transcription_usage(file_path)
 
     return output_path, None
 
@@ -1517,8 +1402,8 @@ def upload_file():
 
 
 @application.route('/process/<process_id>', methods=['POST'])
+def @application.route('/process/<process_id>', methods=['POST'])
 def process_file(process_id):
-    """Process uploaded audio file with optimized transcription"""
     # Find the uploaded file
     uploaded_files = list(UPLOAD_FOLDER.glob(f"{process_id}_*"))
 
@@ -1535,53 +1420,64 @@ def process_file(process_id):
         if error_msg:
             return jsonify({'status': 'error', 'message': error_msg})
 
-        # Get the transcript with preserved markers
-        print(f"Starting transcription...")
-        transcript = transcribe_audio_optimized(str(optimized_path))
+        # Now process with the optimized file
+        # Set a timeout for the entire process
+        import signal
 
-        if not transcript:
-            return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
+        class TimeoutException(Exception):
+            pass
 
-        # Verify the transcript has the required markers
-        marker_count = sum(1 for marker in ['new room', 'new attribute', 'new feature', 'comment']
-                           if marker in transcript.lower())
+        def timeout_handler(signum, frame):
+            raise TimeoutException("Processing took too long")
 
-        print(f"Transcript obtained, {marker_count} markers detected")
+        # Set a 45-second timeout for the entire process
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(45)
 
-        # Log the raw transcript for debugging
-        print("\n--- RAW TRANSCRIPT ---")
-        print(transcript)
-        print("--- END RAW TRANSCRIPT ---\n")
+        try:
+            result_path, error_msg = process_audio_file(str(optimized_path), original_filename)
 
-        # Process the transcript
-        results = process_transcript(transcript)
+            # Turn off the alarm
+            signal.alarm(0)
 
-        if not results:
-            return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
+            if error_msg:
+                return jsonify({'status': 'error', 'message': error_msg})
 
-        print(f"Processed into {len(results)} CSV rows")
+            # Return success with the output filename
+            return jsonify({
+                'status': 'success',
+                'outputFilename': Path(result_path).name,
+                'message': 'Processing complete'
+            })
+        except TimeoutException:
+            # If the process times out, return a partial result if available
+            # or a timeout message
+            try:
+                # Try to create a partial result
+                partial_transcript = "Transcription timed out. This is a partial result."
+                results = [{"Room": "", "Attribute": "", "Feature": "", "Comment": partial_transcript, "Tenant Responsibility (TR)": ""}]
+                df = pd.DataFrame(results)
 
-        # Create DataFrame
-        df = pd.DataFrame(results)
+                # Generate output filename
+                base_filename = Path(original_filename).stem
+                output_filename = f"{base_filename}_partial_transcript.csv"
+                output_path = TRANSCRIPT_FOLDER / output_filename
 
-        # Generate output filename
-        base_filename = Path(original_filename).stem
-        output_filename = f"{base_filename}_transcript.csv"
-        output_path = TRANSCRIPT_FOLDER / output_filename
+                # Save to CSV
+                df.to_csv(output_path, index=False)
 
-        # Save to CSV
-        df.to_csv(output_path, index=False)
-
-        return jsonify({
-            'status': 'success',
-            'outputFilename': Path(output_path).name,
-            'message': f'Processing complete - created {len(results)} rows'
-        })
+                return jsonify({
+                    'status': 'partial',
+                    'outputFilename': output_filename,
+                    'message': 'Processing timed out, returning partial results'
+                })
+            except:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Processing timed out and could not create partial results'
+                })
 
     except Exception as e:
-        print(f"Error processing file: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)})
     finally:
         # Clean up uploaded file
@@ -1589,6 +1485,9 @@ def process_file(process_id):
             file_path.unlink(missing_ok=True)
         except:
             pass
+
+        # Turn off the alarm in case we had an exception
+        signal.alarm(0)
 
 
 @application.route('/correct_csv/<filename>', methods=['POST'])
@@ -3034,308 +2933,6 @@ def generate_enhanced_docx_report(csv_path, report_type, address, inspection_dat
 
 '''Admin Functions'''
 
-@application.route('/network_test')
-def network_test():
-    """Comprehensive network diagnostic tool"""
-    import socket
-    import requests
-    import subprocess
-    import platform
-    import os
-    import traceback
-    import json
-
-    results = {
-        "timestamp": str(datetime.now()),
-        "environment": {},
-        "dns_tests": {},
-        "connection_tests": {},
-        "network_info": {},
-        "trace_routes": {}
-    }
-
-    # Get environment info
-    try:
-        results["environment"] = {
-            "platform": platform.platform(),
-            "python_version": platform.python_version(),
-            "hostname": socket.gethostname()
-        }
-
-        # Get environment variables (redact sensitive ones)
-        env_vars = {}
-        for key, value in os.environ.items():
-            if any(sensitive in key.lower() for sensitive in ['key', 'secret', 'pass', 'token']):
-                env_vars[key] = "REDACTED"
-            else:
-                env_vars[key] = value
-        results["environment"]["env_vars"] = env_vars
-    except Exception as e:
-        results["environment"]["error"] = str(e)
-
-    # DNS lookup tests
-    domains = [
-        'speech.googleapis.com',
-        'www.google.com',
-        'transcribe.amazonaws.com',
-        's3.amazonaws.com',
-        'ec2.amazonaws.com',
-        'api.openai.com',
-        'phillyscript-db-1.ct2ce24yc54l.eu-west-2.rds.amazonaws.com'  # Your RDB
-    ]
-
-    for domain in domains:
-        try:
-            ip = socket.gethostbyname(domain)
-            results["dns_tests"][domain] = {"status": "success", "ip": ip}
-        except Exception as e:
-            results["dns_tests"][domain] = {"status": "failed", "error": str(e)}
-
-    # Connection tests
-    for domain in domains:
-        if results["dns_tests"].get(domain, {}).get("status") == "success":
-            try:
-                requests_timeout = 3
-                url = f"https://{domain}"
-
-                # Use a very short timeout for quicker failure
-                response = requests.get(url, timeout=requests_timeout)
-                results["connection_tests"][domain] = {
-                    "status": "success",
-                    "status_code": response.status_code,
-                    "reason": response.reason,
-                    "timeout_used": requests_timeout
-                }
-            except requests.exceptions.ConnectTimeout:
-                results["connection_tests"][domain] = {
-                    "status": "failed",
-                    "error": "Connection timed out",
-                    "timeout_used": requests_timeout
-                }
-            except requests.exceptions.ConnectionError as e:
-                results["connection_tests"][domain] = {
-                    "status": "failed",
-                    "error": f"Connection error: {str(e)}"
-                }
-            except Exception as e:
-                results["connection_tests"][domain] = {
-                    "status": "failed",
-                    "error": str(e),
-                    "traceback": traceback.format_exc()
-                }
-
-    # Get network interface info
-    try:
-        results["network_info"]["interfaces"] = {}
-
-        # Get network interfaces and IPs
-        import netifaces
-        for iface in netifaces.interfaces():
-            addrs = netifaces.ifaddresses(iface)
-            if netifaces.AF_INET in addrs:  # IPv4 info
-                results["network_info"]["interfaces"][iface] = addrs[netifaces.AF_INET]
-    except ImportError:
-        results["network_info"]["interfaces"] = "netifaces module not available"
-    except Exception as e:
-        results["network_info"]["interfaces"] = {"error": str(e)}
-
-    # Try to get routing information
-    try:
-        routes_output = subprocess.check_output(["ip", "route"], stderr=subprocess.STDOUT, timeout=3).decode('utf-8')
-        results["network_info"]["routes"] = routes_output.split('\n')
-    except (subprocess.SubprocessError, FileNotFoundError):
-        try:
-            # Alternative method
-            routes_output = subprocess.check_output(["netstat", "-rn"], stderr=subprocess.STDOUT, timeout=3).decode(
-                'utf-8')
-            results["network_info"]["routes"] = routes_output.split('\n')
-        except:
-            results["network_info"]["routes"] = "Could not retrieve route information"
-
-    # IMPORTANT: Check if proxy settings are affecting connections
-    try:
-        proxy_info = {
-            "http_proxy": os.environ.get("http_proxy", "Not set"),
-            "https_proxy": os.environ.get("https_proxy", "Not set"),
-            "HTTP_PROXY": os.environ.get("HTTP_PROXY", "Not set"),
-            "HTTPS_PROXY": os.environ.get("HTTPS_PROXY", "Not set"),
-            "no_proxy": os.environ.get("no_proxy", "Not set"),
-            "NO_PROXY": os.environ.get("NO_PROXY", "Not set")
-        }
-        results["network_info"]["proxy_settings"] = proxy_info
-    except Exception as e:
-        results["network_info"]["proxy_settings"] = {"error": str(e)}
-
-    # Try ping/traceroute (these often don't work in containers but worth trying)
-    for domain in ['speech.googleapis.com', 'transcribe.amazonaws.com']:
-        try:
-            ping_output = subprocess.check_output(["ping", "-c", "3", domain], stderr=subprocess.STDOUT,
-                                                  timeout=5).decode('utf-8')
-            results["trace_routes"][domain] = {"ping": ping_output.split('\n')}
-        except (subprocess.SubprocessError, FileNotFoundError):
-            results["trace_routes"][domain] = {"ping": "Failed to ping"}
-
-    # Return formatted JSON
-    return jsonify(results)
-
-
-@application.route('/test_openai')
-def test_openai():
-    import openai
-    import json
-    import os
-
-    results = {"status": "unknown", "details": {}}
-
-    try:
-        # Same client initialization as your production code
-        client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-        # Simplest possible API call
-        response = client.models.list()
-
-        # Return success details
-        results["status"] = "success"
-        results["details"] = {
-            "models": [model.id for model in response.data[:5]],  # Just show first 5 models
-            "total_models": len(response.data)
-        }
-    except Exception as e:
-        # Capture detailed error information
-        results["status"] = "error"
-        results["details"] = {
-            "error_type": type(e).__name__,
-            "error_message": str(e),
-            "traceback": traceback.format_exc()
-        }
-
-    return jsonify(results)
-
-
-
-def transcribe_with_dummy_data(original_filename):
-    """Return a dummy transcript with the correct structure as a fallback"""
-    print(f"Using dummy transcript data for {original_filename}")
-
-    # Create predetermined structured transcript
-    transcript = """
-new room living room and kitchen
-new attribute doors
-new feature front door
-comment in good condition
-comment hindu religious symbol
-new feature lock on door
-comment in good condition
-comment light scuff marks
-new feature cupboard door
-comment scratches around door handle
-new feature floor by doorway
-comment stain marks around door frames
-new feature shoe rack
-comment handle loose on lower drawer
-new attribute skirting boards
-new feature all skirting boards
-comment in generally good condition
-"""
-
-    return transcript.strip()
-
-
-@application.route('/test_google_speech')
-def test_google_speech():
-    """Direct test of Google Speech API"""
-    import speech_recognition as sr
-    import requests
-    import socket
-    import time
-
-    results = {
-        "timestamp": str(datetime.now()),
-        "tests": []
-    }
-
-    # Test 1: Basic DNS resolution
-    test1 = {"name": "DNS Resolution", "target": "speech.googleapis.com"}
-    try:
-        start_time = time.time()
-        ip = socket.gethostbyname("speech.googleapis.com")
-        test1["status"] = "success"
-        test1["ip"] = ip
-        test1["time_taken"] = f"{(time.time() - start_time):.2f}s"
-    except Exception as e:
-        test1["status"] = "failed"
-        test1["error"] = str(e)
-    results["tests"].append(test1)
-
-    # Test 2: HTTPS connection
-    test2 = {"name": "HTTPS Connection", "target": "https://speech.googleapis.com/v1/speech:recognize"}
-    try:
-        start_time = time.time()
-        response = requests.get("https://speech.googleapis.com/v1/speech:recognize", timeout=5)
-        test2["status"] = "success"
-        test2["status_code"] = response.status_code
-        test2["response"] = response.text[:100] + "..." if len(response.text) > 100 else response.text
-        test2["time_taken"] = f"{(time.time() - start_time):.2f}s"
-    except Exception as e:
-        test2["status"] = "failed"
-        test2["error"] = str(e)
-    results["tests"].append(test2)
-
-    # Test 3: Speech Recognizer initialization
-    test3 = {"name": "Speech Recognizer Init"}
-    try:
-        start_time = time.time()
-        recognizer = sr.Recognizer()
-        test3["status"] = "success"
-        test3["time_taken"] = f"{(time.time() - start_time):.2f}s"
-    except Exception as e:
-        test3["status"] = "failed"
-        test3["error"] = str(e)
-    results["tests"].append(test3)
-
-    # Only do further tests if recognizer initialized successfully
-    if test3["status"] == "success":
-        # Create a small audio file in-memory to test
-        try:
-            from pydub import AudioSegment
-            from pydub.generators import Sine
-
-            # Generate a simple tone
-            test4 = {"name": "Generate Test Audio"}
-            start_time = time.time()
-            tone = Sine(440).to_audio_segment(duration=1000)  # 1 second 440Hz tone
-            test_audio_path = "/tmp/test_tone.wav"
-            tone.export(test_audio_path, format="wav")
-            test4["status"] = "success"
-            test4["time_taken"] = f"{(time.time() - start_time):.2f}s"
-            results["tests"].append(test4)
-
-            # Try to recognize with Google (expecting failure, but want to see exact error)
-            test5 = {"name": "Google API Recognition"}
-            try:
-                start_time = time.time()
-                with sr.AudioFile(test_audio_path) as source:
-                    audio_data = recognizer.record(source)
-                    # This will likely fail, but we want to see the exact error
-                    transcript = recognizer.recognize_google(audio_data)
-                    test5["status"] = "success"  # Surprising if it works!
-                    test5["transcript"] = transcript
-                    test5["time_taken"] = f"{(time.time() - start_time):.2f}s"
-            except Exception as e:
-                test5["status"] = "failed"
-                test5["error"] = str(e)
-                test5["error_type"] = type(e).__name__
-            results["tests"].append(test5)
-
-        except Exception as e:
-            results["tests"].append({
-                "name": "Generate Test Audio",
-                "status": "failed",
-                "error": str(e)
-            })
-
-    return jsonify(results)
-
 @app.route('/test_outbound')
 def test_outbound():
     import requests
@@ -3395,95 +2992,6 @@ def debug_environment():
 
     return jsonify(env_info)
 
-
-def test_database_connectivity():
-    """
-    Comprehensive database connectivity test with detailed diagnostics.
-
-    Returns:
-        dict: Connectivity test results with detailed information
-    """
-    results = {
-        "status": "unknown",
-        "connection": {},
-        "engine_details": {},
-        "environment": {}
-    }
-
-    try:
-        # Retrieve database URL from environment
-        database_url = os.environ.get('DATABASE_URL')
-
-        if not database_url:
-            return {
-                "status": "error",
-                "message": "DATABASE_URL environment variable not set"
-            }
-
-        # Logging configuration
-        logging.basicConfig(level=logging.INFO)
-        logger = logging.getLogger(__name__)
-
-        # Create engine with extended diagnostics
-        engine = create_engine(
-            database_url,
-            echo=True,  # Enable SQL logging
-            pool_pre_ping=True,  # Test connection before using
-            pool_recycle=3600,  # Recycle connections after 1 hour
-            connect_args={
-                'connect_timeout': 10,  # 10-second connection timeout
-            }
-        )
-
-        # Collect environment details
-        results['environment'] = {
-            'database_url': database_url.split(':')[0] + '://***:***@' + database_url.split('@')[1],
-            'python_version': platform.python_version(),
-            'sqlalchemy_version': sqlalchemy.__version__
-        }
-
-        # Test connection
-        with engine.connect() as connection:
-            # Simple query to test connectivity
-            result = connection.execute(text("SELECT current_timestamp"))
-            current_time = result.fetchone()[0]
-
-            results['connection'] = {
-                'status': 'success',
-                'current_database_time': str(current_time),
-                'connection_pool_status': str(engine.pool.status())
-            }
-
-            # Basic database information
-            results['engine_details'] = {
-                'driver': connection.connection.driver,
-                'server_version': connection.connection.server_version
-            }
-
-    except Exception as e:
-        # Detailed error capture
-        results['status'] = 'error'
-        results['connection']['error'] = {
-            'type': type(e).__name__,
-            'message': str(e),
-            'detailed_traceback': traceback.format_exc()
-        }
-
-        # Log the full error for server-side tracking
-        logger.error(f"Database Connectivity Test Failed: {e}")
-        logger.error(traceback.format_exc())
-
-    return results
-
-
-@application.route('/test_database', methods=['GET'])
-def database_connectivity_route():
-    """
-    Web route to test database connectivity.
-    Exposes the database test function via a Flask route.
-    """
-    test_results = test_database_connectivity()
-    return jsonify(test_results)
 
 @application.route('/test_upload_page')
 @login_required

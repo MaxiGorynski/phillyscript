@@ -1,0 +1,43 @@
+Major Improvements (to be found in application_sqlite.py file)
+
+Consolidated Backup Function:
+
+Removed the duplicate backup_db_to_s3() function
+Improved error handling and logging
+
+
+Force SQLite Option:
+
+Added a FORCE_SQLITE environment variable to easily switch to SQLite mode
+This lets you force SQLite even if DATABASE_URL is present
+
+
+Automatic Scheduled Backups:
+
+Added a before_request hook to check if a backup is needed
+Backups will happen at most once per hour
+This provides automatic protection of your SQLite data
+
+
+Better Organization:
+
+Code is organized more logically, with S3 availability check at the top
+Clearer decision tree for database configuration
+
+
+
+AWS App Runner Configuration Updates
+To use this with App Runner, update your environment variables:
+
+Set FORCE_SQLITE=true to always use SQLite regardless of DATABASE_URL
+Set S3_BUCKET=your-actual-bucket-name for backups
+Make sure your App Runner service has IAM permissions to access the S3 bucket
+
+This configuration will:
+
+Always use SQLite for your database
+Download the latest backup from S3 at startup
+Backup to S3 once per hour
+Support all your user tracking functionality
+
+The SQLite database will be stored in the application's working directory, which is ephemeral in App Runner. That's why the S3 backup is crucial - it ensures your data persists even if the App Runner instance is replaced.
