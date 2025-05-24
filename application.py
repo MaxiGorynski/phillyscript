@@ -16,6 +16,12 @@ import tempfile
 import subprocess
 import concurrent.futures
 from datetime import datetime
+import sqlalchemy
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.engine.url import make_url
+import platform
+import sys
 
 # Configure logging first - increase level to see more details
 logging.basicConfig(level=logging.INFO,
@@ -718,9 +724,6 @@ def transcribe_audio_optimized(audio_path):
                 with sr.AudioFile(chunk_path) as source:
                     audio_data = recognizer.record(source)
 
-                    # Use timeout to prevent hanging
-                    import signal
-
                     def handler(signum, frame):
                         raise TimeoutError("Chunk processing timed out")
 
@@ -1275,14 +1278,31 @@ def process_transcript(transcript):
     * New Attribute → new row with attribute, first feature, first comment
     * New Feature → new row with feature, first comment
     * New Comment → new row with just the comment
+
+    Updated to handle continuous text with trigger words embedded as space-separated phrases.
     """
     print("\nProcessing transcript...")
     results = []
 
-    # Split transcript into lines for cleaner processing
-    lines = transcript.strip().split('\n')
-    lines = [line.strip() for line in lines if line.strip()]
+    # Clean up the transcript
+    transcript = transcript.strip().lower()
 
+    # Split the transcript at trigger words to create segments
+    # Use regex to split while keeping the trigger words
+    import re
+
+    # Define trigger patterns
+    trigger_pattern = r'(new room|new attribute|new feature|comment)'
+
+    # Split the transcript while keeping the delimiters
+    segments = re.split(trigger_pattern, transcript)
+
+    # Remove empty segments and strip whitespace
+    segments = [seg.strip() for seg in segments if seg.strip()]
+
+    print(f"Split transcript into {len(segments)} segments: {segments}")
+
+    # Process segments in pairs (trigger + content)
     current_room = ""
     current_attribute = ""
     current_feature = ""
@@ -1294,107 +1314,136 @@ def process_transcript(transcript):
         "Tenant Responsibility (TR)": ""
     }
 
-    # Process each line
-    for line in lines:
-        line = line.strip()
+    i = 0
+    while i < len(segments):
+        segment = segments[i].strip()
 
-        # Skip empty lines
-        if not line:
+        # Skip empty segments
+        if not segment:
+            i += 1
             continue
 
-        lower_line = line.lower()
+        # Check if this segment is a trigger word
+        if segment in ['new room', 'new attribute', 'new feature', 'comment']:
+            trigger = segment
 
-        # Handle "new room"
-        if lower_line.startswith("new room"):
-            # Add any pending row first
-            if any(pending_row.values()):
-                results.append(pending_row.copy())
-
-            # Start a new row with this room
-            current_room = line[8:].strip()  # Remove "new room" prefix
-            pending_row = {
-                "Room": current_room,
-                "Attribute": "",
-                "Feature": "",
-                "Comment": "",
-                "Tenant Responsibility (TR)": ""
-            }
-
-        # Handle "new attribute"
-        elif lower_line.startswith("new attribute"):
-            # If we have a pending room but no attribute yet, add to same row
-            if pending_row["Room"] and not pending_row["Attribute"]:
-                current_attribute = line[13:].strip()  # Remove "new attribute" prefix
-                pending_row["Attribute"] = current_attribute
+            # Get the content following this trigger (next segment)
+            content = ""
+            if i + 1 < len(segments):
+                content = segments[i + 1].strip()
+                i += 2  # Skip both trigger and content
             else:
-                # Otherwise, save pending row and start new row
+                i += 1  # Just skip the trigger if no content follows
+
+            print(f"Processing trigger: '{trigger}' with content: '{content}'")
+
+            # Handle each trigger type
+            if trigger == "new room":
+                # Add any pending row first
                 if any(pending_row.values()):
                     results.append(pending_row.copy())
+                    print(f"Added pending row: {pending_row}")
 
-                current_attribute = line[13:].strip()  # Remove "new attribute" prefix
+                # Start a new row with this room
+                current_room = content
                 pending_row = {
-                    "Room": "",  # Empty for hierarchical display
-                    "Attribute": current_attribute,
+                    "Room": current_room,
+                    "Attribute": "",
                     "Feature": "",
                     "Comment": "",
                     "Tenant Responsibility (TR)": ""
                 }
+                print(f"Started new room: '{current_room}'")
 
-        # Handle "new feature"
-        elif lower_line.startswith("new feature"):
-            # If we have a pending attribute but no feature yet, add to same row
-            if (pending_row["Room"] or pending_row["Attribute"]) and not pending_row["Feature"]:
-                current_feature = line[11:].strip()  # Remove "new feature" prefix
-                pending_row["Feature"] = current_feature
-            else:
-                # Otherwise, save pending row and start new row
-                if any(pending_row.values()):
-                    results.append(pending_row.copy())
+            elif trigger == "new attribute":
+                # If we have a pending room but no attribute yet, add to same row
+                if pending_row["Room"] and not pending_row["Attribute"]:
+                    current_attribute = content
+                    pending_row["Attribute"] = current_attribute
+                    print(f"Added attribute to existing row: '{current_attribute}'")
+                else:
+                    # Otherwise, save pending row and start new row
+                    if any(pending_row.values()):
+                        results.append(pending_row.copy())
+                        print(f"Added pending row: {pending_row}")
 
-                current_feature = line[11:].strip()  # Remove "new feature" prefix
-                pending_row = {
-                    "Room": "",  # Empty for hierarchical display
-                    "Attribute": "",  # Empty for hierarchical display
-                    "Feature": current_feature,
-                    "Comment": "",
-                    "Tenant Responsibility (TR)": ""
-                }
+                    current_attribute = content
+                    pending_row = {
+                        "Room": "",  # Empty for hierarchical display
+                        "Attribute": current_attribute,
+                        "Feature": "",
+                        "Comment": "",
+                        "Tenant Responsibility (TR)": ""
+                    }
+                    print(f"Started new attribute row: '{current_attribute}'")
 
-        # Handle "comment"
-        elif lower_line.startswith("comment"):
-            comment_text = line[7:].strip()  # Remove "comment" prefix
-            is_tenant_responsibility = "tenant responsibility" in comment_text.lower()
+            elif trigger == "new feature":
+                # If we have a pending attribute but no feature yet, add to same row
+                if (pending_row["Room"] or pending_row["Attribute"]) and not pending_row["Feature"]:
+                    current_feature = content
+                    pending_row["Feature"] = current_feature
+                    print(f"Added feature to existing row: '{current_feature}'")
+                else:
+                    # Otherwise, save pending row and start new row
+                    if any(pending_row.values()):
+                        results.append(pending_row.copy())
+                        print(f"Added pending row: {pending_row}")
 
-            # Apply text formatting if function is available
-            if callable(format_text):
-                try:
-                    comment_text = format_text(comment_text)
-                except Exception as e:
-                    print(f"Warning: Error formatting comment: {str(e)}")
+                    current_feature = content
+                    pending_row = {
+                        "Room": "",  # Empty for hierarchical display
+                        "Attribute": "",  # Empty for hierarchical display
+                        "Feature": current_feature,
+                        "Comment": "",
+                        "Tenant Responsibility (TR)": ""
+                    }
+                    print(f"Started new feature row: '{current_feature}'")
 
-            # If we have a pending feature but no comment yet, add to same row
-            if (pending_row["Room"] or pending_row["Attribute"] or pending_row["Feature"]) and not pending_row[
-                "Comment"]:
-                pending_row["Comment"] = comment_text
-                pending_row["Tenant Responsibility (TR)"] = "✓" if is_tenant_responsibility else ""
-            else:
-                # Otherwise, save pending row and start new row with just the comment
-                if any(pending_row.values()):
-                    results.append(pending_row.copy())
+            elif trigger == "comment":
+                is_tenant_responsibility = "tenant responsibility" in content.lower()
 
-                pending_row = {
-                    "Room": "",  # Empty for hierarchical display
-                    "Attribute": "",  # Empty for hierarchical display
-                    "Feature": "",  # Empty for hierarchical display
-                    "Comment": comment_text,
-                    "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
-                }
+                # Apply text formatting if function is available
+                if callable(format_text):
+                    try:
+                        content = format_text(content)
+                    except Exception as e:
+                        print(f"Warning: Error formatting comment: {str(e)}")
+
+                # If we have a pending feature but no comment yet, add to same row
+                if (pending_row["Room"] or pending_row["Attribute"] or pending_row["Feature"]) and not pending_row[
+                    "Comment"]:
+                    pending_row["Comment"] = content
+                    pending_row["Tenant Responsibility (TR)"] = "✓" if is_tenant_responsibility else ""
+                    print(f"Added comment to existing row: '{content}'")
+                else:
+                    # Otherwise, save pending row and start new row with just the comment
+                    if any(pending_row.values()):
+                        results.append(pending_row.copy())
+                        print(f"Added pending row: {pending_row}")
+
+                    pending_row = {
+                        "Room": "",  # Empty for hierarchical display
+                        "Attribute": "",  # Empty for hierarchical display
+                        "Feature": "",  # Empty for hierarchical display
+                        "Comment": content,
+                        "Tenant Responsibility (TR)": "✓" if is_tenant_responsibility else ""
+                    }
+                    print(f"Started new comment row: '{content}'")
+        else:
+            # This segment is not a trigger word, skip it
+            # (This shouldn't happen with our regex split, but just in case)
+            i += 1
 
     # Add final pending row if any
     if any(pending_row.values()):
         results.append(pending_row.copy())
+        print(f"Added final pending row: {pending_row}")
 
     print(f"Processed transcript into {len(results)} rows")
+
+    # Debug: print each result row
+    for idx, row in enumerate(results):
+        print(f"Row {idx + 1}: {row}")
 
     return results
 
@@ -1542,6 +1591,10 @@ def process_file(process_id):
         if not transcript:
             return jsonify({'status': 'error', 'message': 'Failed to transcribe audio'})
 
+        # Apply GPT correction to improve transcript quality
+        print(f"Applying GPT correction...")
+        corrected_transcript = correct_transcript_with_gpt(transcript)
+
         # Verify the transcript has the required markers
         marker_count = sum(1 for marker in ['new room', 'new attribute', 'new feature', 'comment']
                            if marker in transcript.lower())
@@ -1554,7 +1607,7 @@ def process_file(process_id):
         print("--- END RAW TRANSCRIPT ---\n")
 
         # Process the transcript
-        results = process_transcript(transcript)
+        results = process_transcript(corrected_transcript)
 
         if not results:
             return jsonify({'status': 'error', 'message': 'No features found in the transcript'})
@@ -3040,8 +3093,6 @@ def network_test():
     import socket
     import requests
     import subprocess
-    import platform
-    import os
     import traceback
     import json
 
@@ -3183,7 +3234,6 @@ def network_test():
 def test_openai():
     import openai
     import json
-    import os
 
     results = {"status": "unknown", "details": {}}
 
@@ -3380,8 +3430,6 @@ def init_db():
 @login_required
 def debug_environment():
     """Debug endpoint to show environment details"""
-    import sys
-    import platform
 
     env_info = {
         'python_version': sys.version,
@@ -3435,11 +3483,15 @@ def test_database_connectivity():
             }
         )
 
-        # Collect environment details
+        # Collect comprehensive environment details
         results['environment'] = {
-            'database_url': database_url.split(':')[0] + '://***:***@' + database_url.split('@')[1],
+            'database_url': make_url(database_url).render_as_string(hide_password=True),
             'python_version': platform.python_version(),
-            'sqlalchemy_version': sqlalchemy.__version__
+            'python_implementation': platform.python_implementation(),
+            'system': platform.system(),
+            'system_release': platform.release(),
+            'sqlalchemy_version': sqlalchemy.__version__,
+            'python_executable': sys.executable
         }
 
         # Test connection
@@ -3448,20 +3500,36 @@ def test_database_connectivity():
             result = connection.execute(text("SELECT current_timestamp"))
             current_time = result.fetchone()[0]
 
+            # Get connection details using psycopg2-specific methods
+            raw_connection = connection.connection
+
+            # Attempt to get database server version
+            try:
+                version_query = connection.execute(text("SELECT version()"))
+                db_version = version_query.scalar()
+            except Exception as version_err:
+                db_version = "Version query failed: " + str(version_err)
+
             results['connection'] = {
                 'status': 'success',
                 'current_database_time': str(current_time),
                 'connection_pool_status': str(engine.pool.status())
             }
 
-            # Basic database information
+            # Engine and connection details
             results['engine_details'] = {
-                'driver': connection.connection.driver,
-                'server_version': connection.connection.server_version
+                'database_server_version': db_version,
+                'connection_parameters': {
+                    'dsn': raw_connection.dsn if hasattr(raw_connection, 'dsn') else 'Not available',
+                    'autocommit': raw_connection.autocommit if hasattr(raw_connection,
+                                                                       'autocommit') else 'Not available'
+                }
             }
 
-    except Exception as e:
-        # Detailed error capture
+        results['status'] = 'success'
+
+    except SQLAlchemyError as e:
+        # Specific SQLAlchemy error handling
         results['status'] = 'error'
         results['connection']['error'] = {
             'type': type(e).__name__,
@@ -3471,6 +3539,19 @@ def test_database_connectivity():
 
         # Log the full error for server-side tracking
         logger.error(f"Database Connectivity Test Failed: {e}")
+        logger.error(traceback.format_exc())
+
+    except Exception as e:
+        # Catch-all for any other unexpected errors
+        results['status'] = 'error'
+        results['connection']['error'] = {
+            'type': type(e).__name__,
+            'message': str(e),
+            'detailed_traceback': traceback.format_exc()
+        }
+
+        # Log the full error for server-side tracking
+        logger.error(f"Unexpected Error in Database Connectivity Test: {e}")
         logger.error(traceback.format_exc())
 
     return results
