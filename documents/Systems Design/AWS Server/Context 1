@@ -1,0 +1,128 @@
+PhillyScript Project Troubleshooting Summary
+Project Overview
+PhillyScript is a Flask-based web application deployed on AWS App Runner that enables property inspectors to record and transcribe audio notes, generating structured CSV reports with room, attribute, feature, and comment categories. The application uses Google's Speech-to-Text API for transcription and PostgreSQL on RDS for user authentication and data storage.
+Original Problem
+After migrating from SQLite to PostgreSQL, the audio transcription functionality stopped working. The Google Speech-to-Text API calls began timing out with the error: [Errno 101] Network is unreachable. This prevented the application from processing audio recordings into structured data.
+Detailed Troubleshooting Timeline
+1. Initial Assessment
+
+Identified worker timeouts in App Runner logs (~2 minutes)
+Confirmed the database connection was working but Google API calls were failing
+Determined the issue was related to network connectivity from App Runner to external services
+
+2. Code-Level Optimizations (Unsuccessful)
+
+Implemented chunking of audio files to process in smaller segments
+Added timeout handlers to prevent worker process terminations
+Created structured transcription fallbacks
+Added comprehensive error handling
+
+These changes improved stability but didn't resolve the core connectivity issue, as all chunks consistently failed with [Errno 101] Network is unreachable.
+3. Network Configuration Analysis
+
+Added network diagnostic endpoints that revealed:
+
+DNS resolution was working (could resolve speech.googleapis.com)
+But all connection attempts failed with network unreachable errors
+Even internal AWS services (S3, EC2) couldn't be reached
+
+
+
+4. VPC Configuration Adjustments (Unsuccessful)
+
+Analyzed the VPC setup with three subnets across availability zones
+Discovered mixed route table configurations:
+
+Some subnets routed through Internet Gateway (public)
+Some through NAT Gateway (private)
+
+
+Updated route table associations to use NAT Gateway consistently
+Created a new VPC connector with dedicated security group
+Ensured security group outbound rules allowed all traffic (0.0.0.0/0)
+
+These changes didn't resolve the issue - App Runner still couldn't reach external services.
+5. RDS Configuration Changes (Unsuccessful)
+
+Made the PostgreSQL database publicly accessible
+Verified security group inbound rules allowed connections from anywhere (0.0.0.0/0)
+Switched App Runner to use public networking instead of VPC networking
+
+This approach uncovered a new issue - now the database connection was timing out with public networking enabled.
+6. Network ACL Investigation (Current Roadblock)
+
+Discovered the default Network ACL had a default (*) rule denying all outbound traffic
+Attempted to modify this rule but found it was immutable in AWS
+Created a new Network ACL with Rule #100 allowing all traffic
+Reassociated subnets with the new ACL
+
+Despite having Rule #100 that should allow traffic before the default deny rule is evaluated, we still encountered connectivity issues.
+Current Status
+
+The application is currently non-functional due to network connectivity issues
+With VPC networking: Database works but Google API fails
+With public networking: Google API might work but database fails
+Network ACLs appear to have the correct rules in place but traffic is still blocked
+
+Recommendations for Moving Forward
+1. AWS Support Escalation
+
+Contact AWS Support with detailed logs and configuration details
+Request assistance specifically with App Runner networking constraints
+Ask about potential service-specific limitations or known issues
+
+2. Alternative Architecture
+
+Option A: EC2-Based Deployment
+
+Migrate from App Runner to EC2 instance(s)
+Configure standard networking with more control
+Use standard VPC networking patterns that are well-documented
+
+
+Option B: Lambda-Based Architecture
+
+Implement transcription as Lambda functions
+Use API Gateway for front-end endpoints
+Leverage Lambda's built-in VPC connectivity options
+
+
+
+3. Alternative Transcription Services
+
+AWS Transcribe: Switch to AWS's native transcription service
+
+Better integration with AWS infrastructure
+Likely to have fewer networking issues in AWS environment
+Similar pricing to Google (~50% more expensive)
+
+
+Local Speech Recognition:
+
+Implement on-device transcription using libraries like DeepSpeech
+Eliminate dependency on external API calls
+May reduce accuracy but removes network dependencies
+
+
+
+4. Advanced Network Configurations
+
+Transit Gateway: Implement AWS Transit Gateway for more flexible routing
+VPC Endpoints: Create VPC Endpoints for AWS services to bypass internet
+Custom Network Architecture: Design a specialized network topology with proper isolation and connectivity paths
+
+5. Temporary Workarounds
+
+Client-Side Transcription: Move speech recognition to the browser using Web Speech API
+Bypass Authentication: Temporarily disable database dependency for authentication
+Manual Transcript Entry: Add capability for users to type transcripts directly
+
+Technical Insights Gained
+
+App Runner has specific networking constraints that aren't well-documented
+Network ACLs can block traffic even when security groups allow it
+The default (*) rule in Network ACLs cannot be modified
+Making RDS publicly accessible changes routing patterns in unexpected ways
+VPC connector settings have significant impact on both internal and external connectivity
+
+This comprehensive troubleshooting process has revealed the complexity of networking in AWS, particularly with newer services like App Runner. The underlying issue appears to be related to how App Runner handles outbound traffic in conjunction with Network ACLs, a challenge that likely requires AWS expertise to fully resolve.
