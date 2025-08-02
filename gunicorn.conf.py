@@ -1,8 +1,10 @@
 # Gunicorn configuration file
 import multiprocessing
+import os
 
-# Server socket
-bind = "0.0.0.0:8080"
+# Server socket - use Railway's dynamic PORT
+port = os.environ.get("PORT", 8080)
+bind = f"0.0.0.0:{port}"
 
 # Worker processes
 workers = 2
