@@ -1,0 +1,186 @@
+PhillyScript Project - Comprehensive Diagnostic Status Report
+Project Purpose
+PhillyScript is an innovative web application designed to revolutionize property inspection documentation by transforming audio recordings into structured, actionable data. The solution addresses the inefficiencies of manual property inspection reporting through automated transcription and intelligent data processing.
+Comprehensive Technical Architecture
+Core Technologies
+
+Web Framework: Flask (Python 3.8)
+Backend Infrastructure:
+
+AWS App Runner
+VPC-based networking
+
+
+Database: PostgreSQL on AWS RDS
+AI Integration:
+
+Google Speech-to-Text API (Audio Transcription)
+OpenAI GPT-3.5 Turbo (Transcript Correction)
+
+
+Data Processing:
+
+Pandas for CSV manipulation
+Custom parsing algorithms for structured extraction
+
+
+
+Deployment Environment
+
+Cloud Provider: Amazon Web Services
+Hosting Service: App Runner
+Networking Model:
+
+Private subnets
+NAT Gateway for internet connectivity
+VPC connector for service integration
+
+
+
+Detailed Migration and Networking Evolution
+Initial Configuration
+
+Originally used SQLite for local development
+Simple, direct network connectivity
+Minimal external API dependencies
+
+Migration Challenges
+
+Database Transition
+
+Migrated from SQLite to PostgreSQL
+Moved to AWS RDS for scalable, managed database solution
+Required comprehensive connection string and authentication updates
+
+
+Network Infrastructure Transformation
+
+Implemented AWS App Runner with VPC networking
+Introduced complex subnet routing
+Required NAT Gateway for outbound internet access
+
+
+
+Networking Configuration Milestones
+
+Created three private subnets for App Runner
+Established dedicated public subnet for NAT Gateway
+Resolved initial circular routing problem
+Configured route tables to enable controlled internet access
+
+Diagnostic Journey and Connectivity Testing
+OpenAI API Connectivity
+Initial State
+
+Encountered 421 "Misdirected Request" error
+Suspected HTTP protocol compatibility issue
+
+Diagnostic Findings
+
+Successfully retrieved model list
+Confirmed API key functionality
+Identified potential HTTP/2 vs HTTP/1.1 conflict
+
+Resolution Approach
+
+Implemented explicit HTTP/1.1 configuration
+Added comprehensive error logging
+Created custom OpenAI client with network-aware initialization
+
+Database Connectivity
+Connection Challenges
+
+Transitioned from local SQLite to remote PostgreSQL
+Required updated connection management
+Needed to handle VPC networking complexities
+
+Diagnostic Process
+
+Created detailed connectivity test route
+Verified RDS instance accessibility
+Confirmed network routing to database
+Retrieved database server details
+
+PostgreSQL 17.2
+Running on aarch64 architecture
+Compiled with GCC 12.4.0
+
+
+
+Transcription Pipeline Disruption
+Observed Symptoms
+
+Google Speech-to-Text API calls timing out
+Error: "Network is unreachable"
+Transcript processing seemingly bypassed
+
+Potential Root Causes
+
+Network routing restrictions
+Misconfigured VPC security groups
+SSL/TLS negotiation failures
+Incomplete error handling in transcription logic
+
+Technical Diagnostic Artifacts Created
+Implemented Test Routes
+
+/test_openai
+
+Validates OpenAI API connectivity
+Retrieves available models
+Captures detailed error information
+
+
+/test_database
+
+Tests PostgreSQL connection
+Retrieves system and connection metadata
+Validates network routing
+
+
+
+Logging and Error Tracking
+
+Enhanced logging configuration
+Detailed error capture mechanisms
+Unique identifier generation for request tracing
+
+Current System Capabilities
+✓ Basic web application structure operational
+✓ Database connection established
+✓ OpenAI API basic connectivity confirmed
+⚠️ Transcription pipeline requires comprehensive debugging
+Comprehensive Hypothesis
+The network reconfiguration has introduced nuanced connectivity challenges:
+
+Potential SSL/TLS negotiation conflicts
+Subtle routing restrictions in VPC
+Incomplete error handling in external API interactions
+
+Recommended Diagnostic Progression
+
+Implement granular API call logging
+Create explicit network configuration validation
+Develop comprehensive error tracking in transcription workflow
+Perform systematic, isolated testing of each pipeline component
+
+Proposed Next Investigation Vectors
+
+Detailed network trace analysis
+Explicit SSL/TLS configuration
+Enhanced error propagation in transcription logic
+Isolated testing of Speech-to-Text API calls
+
+Environmental Context
+
+Python Version: 3.8.20
+System: Linux (Amazon Linux 2)
+Deployment: AWS App Runner
+Database: PostgreSQL 17.2 on aarch64
+
+Potential Performance and Security Considerations
+
+Evaluate current VPC subnet configuration
+Review security group rules
+Assess current error handling and logging strategies
+Consider implementing circuit breaker patterns for API interactions
