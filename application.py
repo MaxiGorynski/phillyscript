@@ -276,7 +276,6 @@ import difflib
 from docx import Document
 from flask_login import login_required, current_user
 
-
 # Create database tables ONCE within an application context with improved error handling
 try:
     with application.app_context():
@@ -284,13 +283,32 @@ try:
         try:
             logger.info("Testing database connection...")
             with db.engine.connect() as conn:
-                conn.execute("SELECT 1")
+                conn.execute(text("SELECT 1"))
             logger.info("Database connection successful!")
 
-            # Create tables if the connection was successful
-            logger.info("Creating database tables...")
-            db.create_all()
-            logger.info("Database tables created successfully")
+            # Check if tables already exist before creating them
+            logger.info("Checking if database tables exist...")
+            try:
+                # Try to query the User table to see if it exists
+                with db.engine.connect() as conn:
+                    result = conn.execute(text("SELECT COUNT(*) FROM \"user\""))
+                    user_count = result.scalar()
+                logger.info(f"Found existing user table with {user_count} users")
+                logger.info("Database tables already exist, skipping creation")
+            except Exception as table_check_error:
+                # Tables don't exist, so create them
+                logger.info("Tables don't exist yet, creating database tables...")
+                try:
+                    db.create_all()
+                    logger.info("Database tables created successfully")
+                except Exception as create_error:
+                    logger.error(f"Error creating tables: {str(create_error)}")
+                    # If we get a "relation already exists" error, that's actually fine
+                    if "already exists" in str(create_error).lower():
+                        logger.info("Tables already exist (caught during creation), continuing...")
+                    else:
+                        raise create_error
+
         except Exception as e:
             logger.error(f"Error with database: {str(e)}")
             logger.warning("Application will continue with limited functionality")
