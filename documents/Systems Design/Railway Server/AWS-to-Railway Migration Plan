@@ -1,0 +1,98 @@
+Phase 1: Railway Setup (2 hours)
+
+Create Railway project:
+
+bashrailway login
+railway init phillyscript
+
+Add PostgreSQL service in Railway dashboard
+Connect your GitHub repo to Railway project
+
+Phase 2: Code Preparation (1 hour)
+Critical insight: Your networking issues will disappear on Railway because:
+
+No VPC/NAT Gateway complexity
+Automatic SSL termination
+Built-in external API connectivity
+
+Required changes (minimal):
+
+Remove AWS-specific code:
+
+python# Remove/simplify these in application.py:
+- boto3 S3 backup functions (lines ~90-130)
+- Custom HTTP client for OpenAI (lines ~45-65)
+- Complex database connection logic
+
+Add Railway configuration:
+
+Create railway.json:
+json{
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "gunicorn application:application --bind 0.0.0.0:$PORT --timeout 120"
+  }
+}
+Create Procfile:
+web: gunicorn application:application --bind 0.0.0.0:$PORT --timeout 120 --workers 2
+Phase 3: Environment Variables
+Migrate these from AWS App Runner to Railway:
+DATABASE_URL → (Railway auto-provides)
+OPENAI_API_KEY → [your key]
+SECRET_KEY → [your secret]
+GOOGLE_APPLICATION_CREDENTIALS → [service account JSON]
+Phase 4: File Storage Strategy
+Since you're using /tmp/ for temporary files, no changes needed:
+
+Railway provides ephemeral storage for temp files
+Your workflow (upload → process → download → cleanup) works perfectly
+No persistent storage required
+
+Phase 5: Database Migration
+
+Export from current RDS:
+
+bashpg_dump $CURRENT_DATABASE_URL > backup.sql
+
+Import to Railway:
+
+bashpsql $RAILWAY_DATABASE_URL < backup.sql
+Expected Resolution of Current Issues
+Your troubleshooting document shows you've been fighting:
+
+❌ VPC networking complexity
+❌ NAT Gateway routing issues
+❌ Network ACL conflicts
+❌ App Runner networking limitations
+❌ SSL/TLS negotiation problems
+
+Railway eliminates ALL of these:
+
+✅ No VPC - direct internet connectivity
+✅ Automatic SSL termination
+✅ Built-in external API access
+✅ No NAT Gateway needed
+✅ No Network ACLs to configure
+
+Migration Timeline
+Day 1 (4 hours):
+
+Set up Railway project
+Configure database
+Deploy application
+Migrate environment variables
+
+Day 2 (2 hours):
+
+Test all functionality
+Update DNS
+Monitor and optimize
+
+Immediate Next Steps
+
+Create Railway account and new project
+Export your current database as backup
+Push your code to GitHub (if not already there)
+
