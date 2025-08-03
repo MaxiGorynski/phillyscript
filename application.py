@@ -689,7 +689,14 @@ def transcribe_audio_optimized(audio_path):
                     signal.signal(signal.SIGALRM, handler)
                     signal.alarm(timeout_seconds)
 
-                    transcript = recognizer.recognize_google(audio_data, language="en-US")
+                    with open(wav_path, "rb") as audio_file:
+                        whisper_response = client.audio.transcriptions.create(
+                            model="whisper-1",
+                            file=audio_file,
+                            response_format="text",
+                            language="en"
+                        )
+                        transcript = whisper_response
 
                     # Clear the alarm
                     signal.alarm(0)
