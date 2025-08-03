@@ -758,7 +758,14 @@ def transcribe_audio_optimized(audio_path):
                     signal.alarm(timeout_sec)
 
                     try:
-                        transcript = recognizer.recognize_google(audio_data, language="en-US")
+                        with open(chunk_path, "rb") as chunk_file:
+                            whisper_response = client.audio.transcriptions.create(
+                                model="whisper-1",
+                                file=chunk_file,
+                                response_format="text",
+                                language="en"
+                            )
+                            transcript = whisper_response
                         all_transcripts.append(transcript)
                         signal.alarm(0)  # Clear the alarm
                         print(f"Chunk {i + 1}/{len(chunks)} transcribed successfully")
