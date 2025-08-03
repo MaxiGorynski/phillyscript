@@ -1,0 +1,215 @@
+# PhillyScript Application Functions
+
+## Core Application Functions
+
+### **create_openai_client()**
+Creates an OpenAI client with HTTP/1.1 configuration to resolve AppRunner connectivity issues.
+
+### **backup_db_to_s3()**
+Uploads SQLite database to S3 for backup purposes (if S3 is available).
+
+### **load_user(user_id)**
+Flask-Login user loader function to retrieve user by ID.
+
+## Audio Processing Functions
+
+### **convert_to_wav(audio_path)**
+Converts audio files to WAV format if not already WAV, supporting multiple input formats (MP3, FLAC, M4A, AAC).
+
+### **optimise_audio_file(file_path, output_dir, quality, min_silence_len)**
+Optimizes audio files for transcription by applying compression techniques, silence detection, and format conversion.
+
+### **detect_silence_chunks(audio, silence_threshold, min_silence_len)**
+Detects silent segments in audio using dB threshold analysis.
+
+### **compress_silence(audio, silence_chunks, target_silence_len)**
+Compresses silence segments in audio to reduce file size while maintaining natural pauses.
+
+### **process_uploaded_audio(file_path, original_filename)**
+Processes and optimizes uploaded audio files for transcription.
+
+### **transcribe_audio_optimized(audio_path)**
+Advanced audio transcription function that preserves structure markers, uses chunking for long files, and handles timeouts.
+
+### **fix_transcript_markers(transcript)**
+Processes transcripts to ensure structure markers (new room, new attribute, etc.) are correctly identified.
+
+### **process_audio_in_chunks(wav_path, audio_segment)**
+Processes longer audio files in 10-second chunks to avoid timeouts.
+
+### **track_transcription_usage(file_path, user_id)**
+Calculates audio duration and updates user's transcription usage statistics.
+
+## Text Processing Functions
+
+### **format_text(text)**
+Applies advanced formatting rules to make transcribed text more professional with proper capitalization and punctuation.
+
+### **debug_raw_transcript(audio_path)**
+Debug function to show raw transcription before processing.
+
+### **correct_transcript_with_gpt(transcript)**
+Uses GPT-3.5-Turbo to correct property inspection transcription errors while preserving format markers.
+
+### **correct_csv_with_gpt(csv_path)**
+Processes completed transcript CSV with GPT to correct terminology and speech errors.
+
+### **post_process_existing_csv(csv_path)**
+Applies GPT correction to existing CSV files.
+
+### **process_transcript(transcript)**
+Processes transcript text following hierarchical rules for rooms, attributes, features, and comments.
+
+### **process_audio_file(file_path, original_filename)**
+Main function that processes audio files with GPT correction and converts to CSV format.
+
+## Document Generation Functions
+
+### **generate_report_boilerplate(doc, report_type, address, inspection_date, on_behalf_of)**
+Generates standardized boilerplate content for different report types (inventory, full, checkout).
+
+### **generate_report_closing(doc, report_type, page_count)**
+Generates standardized closing content with signature sections for different report types.
+
+### **generate_enhanced_docx_report(csv_path, report_type, address, inspection_date, on_behalf_of, room_images)**
+Creates comprehensive property inspection reports with images and proper formatting.
+
+## Image Processing Functions
+
+### **process_image_difference(image1_path, image2_path, output_original_path, output_diff_path)**
+Processes two images to find and highlight differences using OpenCV.
+
+## Text Comparison Functions
+
+### **extract_text_from_file(file_path)**
+Extracts text content from various file formats (TXT, DOCX, PDF, RTF).
+
+### **generate_diff_html(original_text, comparison_text)**
+Generates HTML highlighting differences between two texts using difflib.
+
+## Flask Route Handlers
+
+### **diagnostics()**
+API route providing server status and database connectivity information.
+
+### **index()**
+Serves the main application index page.
+
+### **transcribe()**
+Renders the transcription page (login required).
+
+### **upload_file()**
+Handles file uploads and returns process ID for tracking.
+
+### **process_file(process_id)**
+Processes uploaded audio files and generates CSV transcripts.
+
+### **correct_csv(filename)**
+Route to apply GPT correction to existing CSV files.
+
+### **download_file(filename)**
+Serves files for download from the transcript folder.
+
+### **diff_check()**
+Renders the image difference checker page.
+
+### **diff_result(result_id)**
+Renders results page for image comparison.
+
+### **check_files(result_id)**
+Checks if result files exist for image comparison.
+
+### **serve_result_file(filename)**
+Serves files from the results folder.
+
+### **get_diff_result(result_id)**
+API endpoint to get image comparison results.
+
+### **compare_images()**
+Handles image comparison uploads and processing.
+
+### **finalise_report()**
+Renders the finalize report page.
+
+### **compare_text()**
+Handles text comparison uploads and processing.
+
+### **view_comparison(result_id)**
+Serves comparison results directly.
+
+### **generate_report()**
+Generates reports from CSV files with different report types.
+
+### **download_report(filename)**
+Serves generated reports for download.
+
+### **enhanced_report_builder()**
+Renders the enhanced report builder page.
+
+### **get_rooms()**
+API endpoint to extract rooms from CSV files.
+
+### **prepare_report()**
+API endpoint to prepare reports and get intermediate page.
+
+### **generate_enhanced_report()**
+API endpoint to generate final reports with property details and room images.
+
+### **get_csv_rooms()**
+API endpoint to get rooms from CSV files (alternative implementation).
+
+## Testing and Debug Functions
+
+### **test()**
+Basic server functionality test route.
+
+### **basic()**
+Simple HTML test page.
+
+### **transcribe_with_dummy_data(original_filename)**
+Returns dummy transcript data as fallback for testing.
+
+### **network_test()**
+Comprehensive network diagnostic tool.
+
+### **test_openai()**
+Tests OpenAI API connectivity.
+
+### **test_google_speech()**
+Direct test of Google Speech API functionality.
+
+### **test_outbound()**
+Tests outbound connectivity.
+
+### **test_google()**
+Basic Google connectivity test.
+
+### **init_db()**
+Initializes database with admin user.
+
+### **debug_environment()**
+Debug endpoint showing environment details.
+
+### **test_database_connectivity()**
+Comprehensive database connectivity test with diagnostics.
+
+### **database_connectivity_route()**
+Web route for database connectivity testing.
+
+### **test_upload_page()**
+Renders test upload page.
+
+### **test_file_upload()**
+Test endpoint for file upload functionality.
+
+### **handle_error(e)**
+Global error handler for unhandled exceptions.
+
+## Utility Functions
+
+### **transcribe_with_dummy_data(original_filename)**
+Fallback function that returns structured dummy transcript data for testing purposes.
+
+---
+
+*This Flask application is a comprehensive property inspection tool that handles audio transcription, image comparison, document generation, and report building with AI-powered correction capabilities.*
